@@ -443,6 +443,11 @@ static bool isMasterArmGroup(const std::string& group_name) {
     return group_name == "left_arm" || group_name == "right_arm";
 }
 
+static bool isBaseMotionJointName(const std::string& joint_name) {
+    return joint_name.find("chassis") != std::string::npos || joint_name.find("world") != std::string::npos ||
+           joint_name.find("virtual") != std::string::npos || joint_name.find("base") != std::string::npos;
+}
+
 // 相机、鼠标控制（保持原样）
 // ...（直接拷贝你原有 Camera 类）...
 class Camera {
@@ -522,13 +527,47 @@ class OrbitCamera {
     float pitch      = 0.0f;                // 垂直角
     glm::vec3 target = glm::vec3(0, 0, 0);  // 相机观察的目标点
 
-    glm::mat4 getViewMatrix() const {
+    glm::vec3 getEye() const {
         float x = distance * cosf(pitch) * cosf(yaw);
         float y = distance * cosf(pitch) * sinf(yaw);
         float z = distance * sinf(pitch);
+        return target + glm::vec3(x, y, z);
+    }
 
-        glm::vec3 eye = target + glm::vec3(x, y, z);
+    glm::mat4 getViewMatrix() const {
+        glm::vec3 eye = getEye();
         return glm::lookAt(eye, target, glm::vec3(0, 0, 1));
+    }
+
+    void rotate(float dx, float dy) {
+        constexpr float kRotateSpeed = 0.005f;
+        yaw += kRotateSpeed * dx;
+        pitch += kRotateSpeed * dy;
+        pitch = std::clamp(pitch, -1.55f, 1.55f);
+    }
+
+    void zoom(float delta) {
+        constexpr float kZoomScale = 0.1f;
+        distance *= (1.0f - kZoomScale * delta);
+        distance = std::clamp(distance, 0.2f, 20.0f);
+    }
+
+    void dolly(float dy) { zoom(0.02f * dy); }
+
+    void pan(float dx, float dy) {
+        glm::vec3 eye     = getEye();
+        glm::vec3 forward = glm::normalize(target - eye);
+        glm::vec3 worldUp(0.0f, 0.0f, 1.0f);
+        glm::vec3 right = glm::cross(forward, worldUp);
+        if (glm::length(right) < 1e-6f) {
+            right = glm::vec3(1.0f, 0.0f, 0.0f);
+        } else {
+            right = glm::normalize(right);
+        }
+        glm::vec3 up = glm::normalize(glm::cross(right, forward));
+
+        const float pan_scale = 0.0015f * distance;
+        target += (-right * dx + up * dy) * pan_scale;
     }
 };
 
@@ -541,6 +580,7 @@ class Robot {
     std::string package_path;                  // URDF 文件所在目录（你的原始实现）
     urdf::ModelInterfaceSharedPtr urdf_model;  // <<< MOD: 保存解析后的 model 指针
     std::string urdf_file_path;                // 保存路径（若需要）
+    bool fixed_base_mode = true;               // 类似 Mujoco fixed base
 
     std::string resolvePath(const std::string& path) {
         if (path.rfind("package://", 0) == 0) {
@@ -663,6 +703,9 @@ class Robot {
 
                     for (auto& js : joint_states) {
                         if (js.name == joint->name) {
+                            if (fixed_base_mode && isBaseMotionJointName(joint->name)) {
+                                break;
+                            }
                             if (joint->type == urdf::Joint::REVOLUTE || joint->type == urdf::Joint::CONTINUOUS) {
                                 glm::vec3 axis(joint->axis.x, joint->axis.y, joint->axis.z);
                                 if (glm::length(axis) > 0.0001f)
@@ -762,6 +805,9 @@ class Robot {
                 glm::mat4 joint_motion(1.0f);
                 for (auto& js : joint_states) {
                     if (js.name == joint->name) {
+                        if (fixed_base_mode && isBaseMotionJointName(joint->name)) {
+                            break;
+                        }
                         if (joint->type == urdf::Joint::REVOLUTE || joint->type == urdf::Joint::CONTINUOUS) {
                             glm::vec3 axis(joint->axis.x, joint->axis.y, joint->axis.z);
                             if (glm::length(axis) < 1e-6f)
@@ -833,6 +879,8 @@ class Robot {
         }
         return nullptr;
     }
+
+    void setFixedBaseMode(bool enabled) { fixed_base_mode = enabled; }
 };
 
 // ======================== 全局 / 回调（保持原样） ========================
@@ -854,13 +902,16 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 
 // ========== 相机交互状态 (ADD) ==========
 static OrbitCamera camera;
-static double lastX = 0.0, lastY = 0.0;
-static bool rotating       = false;
+static double lastX = 0.0;
+static double lastY = 0.0;
+static bool dragging = false;
 static double scrollOffset = 0.0;
+enum class CameraDragMode { None, Rotate, Pan, Dolly };
+static CameraDragMode dragMode = CameraDragMode::None;
 
 // GLFW 滚轮回调
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
-    scrollOffset = yoffset;
+    scrollOffset += yoffset;
 }
 
 // ======================== main (保留你原始实现，略作小修) ========================
@@ -927,7 +978,11 @@ int main() {
     bool sensor_ready                  = sensor_subscriber.start();
     bool use_sensor_to_drive_robot     = sensor_ready;
     bool only_show_master_arm_groups   = true;
+    bool fix_base_like_mujoco          = true;
     const double stale_timeout_seconds = 0.5;
+    int side_panel_width               = 560;
+    const int collapsed_sidebar_width  = 34;
+    bool sidebar_collapsed             = false;
 
     std::vector<SensorJointSample> latest_sensor_samples;
 
@@ -936,30 +991,57 @@ int main() {
         glfwPollEvents();
 
         if (!io.WantCaptureMouse) {
-            // 鼠标右键拖动旋转相机
-            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+            if (std::abs(scrollOffset) > 1e-6) {
+                camera.zoom(static_cast<float>(scrollOffset));
+                scrollOffset = 0.0;
+            }
+
+            bool lmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            bool mmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+            bool rmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+            bool shift_pressed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+                                 glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+
+            CameraDragMode desired_mode = CameraDragMode::None;
+            if (mmb || (lmb && shift_pressed)) {
+                desired_mode = CameraDragMode::Pan;
+            } else if (rmb) {
+                desired_mode = CameraDragMode::Dolly;
+            } else if (lmb) {
+                desired_mode = CameraDragMode::Rotate;
+            }
+
+            if (desired_mode == CameraDragMode::None) {
+                dragging = false;
+                dragMode = CameraDragMode::None;
+            } else {
                 double xpos, ypos;
                 glfwGetCursorPos(window, &xpos, &ypos);
-                if (!rotating) {
-                    rotating = true;
-                    lastX    = xpos;
-                    lastY    = ypos;
+                if (!dragging || dragMode != desired_mode) {
+                    dragging = true;
+                    dragMode = desired_mode;
+                    lastX = xpos;
+                    lastY = ypos;
                 } else {
                     double dx = xpos - lastX;
                     double dy = ypos - lastY;
-                    lastX     = xpos;
-                    lastY     = ypos;
+                    lastX = xpos;
+                    lastY = ypos;
 
-                    camera.yaw += 0.005f * (float)dx;
-                    camera.pitch += 0.005f * (float)dy;
-                    if (camera.pitch > 1.5f)
-                        camera.pitch = 1.5f;
-                    if (camera.pitch < -1.5f)
-                        camera.pitch = -1.5f;
+                    if (dragMode == CameraDragMode::Rotate) {
+                        camera.rotate(static_cast<float>(dx), static_cast<float>(dy));
+                    } else if (dragMode == CameraDragMode::Pan) {
+                        camera.pan(static_cast<float>(dx), static_cast<float>(dy));
+                    } else if (dragMode == CameraDragMode::Dolly) {
+                        camera.dolly(static_cast<float>(-dy));
+                    }
                 }
-            } else {
-                rotating = false;
             }
+        } else {
+            // 鼠标在 ImGui 面板内时，不消费相机控制输入
+            scrollOffset = 0.0;
+            dragging     = false;
+            dragMode     = CameraDragMode::None;
         }
 
         // ImGui frame
@@ -969,9 +1051,13 @@ int main() {
 
         int w, h;
         glfwGetFramebufferSize(window, &w, &h);
-        int side_panel_width = 460;
-        int render_width     = w - side_panel_width;
-        int render_height    = h;
+        int min_render_width  = 200;
+        int max_sidebar_width = std::max(260, w - min_render_width);
+        int min_sidebar_width = std::min(420, max_sidebar_width);
+        side_panel_width      = std::clamp(side_panel_width, min_sidebar_width, max_sidebar_width);
+        int active_sidebar_width = sidebar_collapsed ? collapsed_sidebar_width : side_panel_width;
+        int render_width         = w - active_sidebar_width;
+        int render_height        = h;
 
         latest_sensor_samples = sensor_subscriber.getLatestSamples();
         if (use_sensor_to_drive_robot && !latest_sensor_samples.empty()) {
@@ -998,15 +1084,29 @@ int main() {
         robot.draw(shader, view, projection);
 
         // ImGui 界面
-        glViewport(w - side_panel_width, 0, side_panel_width, h);
+        glViewport(w - active_sidebar_width, 0, active_sidebar_width, h);
         glDisable(GL_DEPTH_TEST);
-        ImGui::SetNextWindowPos(ImVec2(w - side_panel_width, 0), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(side_panel_width, h));
+        ImGui::SetNextWindowPos(ImVec2(w - active_sidebar_width, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(active_sidebar_width, h));
 
-        ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Robot Control", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+        if (sidebar_collapsed) {
+            ImGui::Begin("SidebarToggleOnly", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
+            ImGui::SetCursorPos(ImVec2(7, 10));
+            if (ImGui::ArrowButton("##expand_sidebar", ImGuiDir_Left)) {
+                sidebar_collapsed = false;
+            }
+            ImGui::End();
+        } else {
+            ImGui::Begin("Robot Control", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
 
+        if (ImGui::ArrowButton("##collapse_sidebar", ImGuiDir_Right)) {
+            sidebar_collapsed = true;
+        }
+        ImGui::SameLine();
         ImGui::Text("Teleop Master Arm Sensor Monitor");
+        ImGui::PushItemWidth(-1.0f);
+        ImGui::DragInt("Sidebar Width", &side_panel_width, 0.2f, min_sidebar_width, max_sidebar_width, "%d px");
+        ImGui::PopItemWidth();
         ImGui::Separator();
 
         uint64_t msg_count = sensor_subscriber.messageCount();
@@ -1033,6 +1133,8 @@ int main() {
             use_sensor_to_drive_robot = false;
         }
         ImGui::Checkbox("Show only left/right arm groups", &only_show_master_arm_groups);
+        ImGui::Checkbox("Fix Base (Mujoco-style)", &fix_base_like_mujoco);
+        robot.setFixedBaseMode(fix_base_like_mujoco);
 
         ImGui::Separator();
         ImGui::Text("Joint Diagnostic");
@@ -1173,6 +1275,9 @@ int main() {
                 if (!joint || joint->type != urdf::Joint::REVOLUTE) {
                     continue;
                 }
+                if (fix_base_like_mujoco && isBaseMotionJointName(js.name)) {
+                    continue;
+                }
 
                 float old_position = js.position;
                 ImGui::SliderAngle(js.name.c_str(), &js.position, glm::degrees(js.min_angle), glm::degrees(js.max_angle));
@@ -1184,10 +1289,13 @@ int main() {
 
         ImGui::Separator();
         ImGui::Text("Camera Controls:");
-        ImGui::Text("Left Mouse Button + Drag: Rotate");
+        ImGui::Text("Left Drag: Rotate (RViz Orbit)");
+        ImGui::Text("Middle Drag or Shift+Left Drag: Pan");
+        ImGui::Text("Right Drag: Dolly Zoom");
         ImGui::Text("Mouse Wheel: Zoom");
 
         ImGui::End();
+        }
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
