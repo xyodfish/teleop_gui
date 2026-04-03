@@ -134,6 +134,10 @@ target_link_libraries(robot_viewer
     OpenGL::GL
     glfw
     GLEW::GLEW
+    singorix_proto::singorix_proto
+    omnilink_proto::omnilink_proto
+    ${EMBOSA_LIBRARIES}
+    pthread
 
 )
 

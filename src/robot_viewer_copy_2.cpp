@@ -10,6 +10,9 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
+#include <galbot/singorix_proto/singorix_sensor.pb.h>
+#include <embosa.hpp>
+
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <assimp/Importer.hpp>
@@ -24,12 +27,18 @@
 #include <glm/gtx/string_cast.hpp>
 
 #include <sys/stat.h>
+#include <algorithm>
+#include <atomic>
+#include <cfloat>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -276,6 +285,163 @@ struct JointState {
     float min_angle = -3.14f;
     float max_angle = 3.14f;
 };
+
+struct SensorJointSample {
+    std::string group;
+    std::string name;
+    double position   = 0.0;
+    double velocity   = 0.0;
+    double effort     = 0.0;
+    double current    = 0.0;
+    bool has_position = false;
+    bool has_velocity = false;
+    bool has_effort   = false;
+    bool has_current  = false;
+};
+
+class MasterArmSensorSubscriber {
+   public:
+    static constexpr const char* kTopicName = "singorix_omnilink/scaled_device_robot_data";
+
+    ~MasterArmSensorSubscriber() { stop(); }
+
+    bool start(const std::string& node_name = "singorix_teleop_gui_sensor_monitor") {
+        if (running_) {
+            return true;
+        }
+
+        embosa_inited_ = galbot::embosa::EmbosaInit();
+        if (!embosa_inited_) {
+            std::cerr << "EmbosaInit failed, sensor monitor disabled." << std::endl;
+            return false;
+        }
+
+        node_ = galbot::embosa::CreateNode(node_name);
+        if (!node_) {
+            std::cerr << "CreateNode failed, sensor monitor disabled." << std::endl;
+            stop();
+            return false;
+        }
+
+        reader_ = node_->CreateReader<galbot::singorix_proto::SingoriXSensor>(
+            kTopicName, [this](const std::shared_ptr<galbot::singorix_proto::SingoriXSensor>& msg, const void*) { onMessage(msg); });
+
+        if (!reader_) {
+            std::cerr << "CreateReader for topic [" << kTopicName << "] failed." << std::endl;
+            stop();
+            return false;
+        }
+
+        std::cout << "Subscribed to topic [" << kTopicName << "]" << std::endl;
+        running_ = true;
+        return true;
+    }
+
+    void stop() {
+        reader_.reset();
+        node_.reset();
+        if (embosa_inited_) {
+            galbot::embosa::Clear();
+            embosa_inited_ = false;
+        }
+        running_ = false;
+    }
+
+    std::vector<SensorJointSample> getLatestSamples() const {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        return latest_samples_;
+    }
+
+    uint64_t messageCount() const { return message_count_.load(std::memory_order_acquire); }
+
+    double messageAgeSec() const {
+        long long ts_ns = last_msg_ns_.load(std::memory_order_acquire);
+        if (ts_ns <= 0) {
+            return -1.0;
+        }
+        long long now_ns = nowSteadyNs();
+        return static_cast<double>(now_ns - ts_ns) / 1e9;
+    }
+
+    bool hasRecentData(double timeout_sec) const {
+        if (messageCount() == 0) {
+            return false;
+        }
+        double age = messageAgeSec();
+        return age >= 0.0 && age <= timeout_sec;
+    }
+
+   private:
+    static long long nowSteadyNs() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    void onMessage(const std::shared_ptr<galbot::singorix_proto::SingoriXSensor>& msg) {
+        if (!msg) {
+            return;
+        }
+
+        std::vector<SensorJointSample> parsed_samples;
+        parsed_samples.reserve(32);
+
+        for (const auto& group_item : msg->joint_sensor_map()) {
+            const std::string& group_name = group_item.first;
+            const auto& joint_sensor      = group_item.second;
+            int n                         = joint_sensor.name_size();
+
+            for (int i = 0; i < n; ++i) {
+                SensorJointSample sample;
+                sample.group = group_name;
+                sample.name  = joint_sensor.name(i);
+                if (sample.name.empty()) {
+                    continue;
+                }
+
+                if (i < joint_sensor.position_size()) {
+                    sample.position     = joint_sensor.position(i);
+                    sample.has_position = true;
+                }
+                if (i < joint_sensor.velocity_size()) {
+                    sample.velocity     = joint_sensor.velocity(i);
+                    sample.has_velocity = true;
+                }
+                if (i < joint_sensor.effort_size()) {
+                    sample.effort     = joint_sensor.effort(i);
+                    sample.has_effort = true;
+                }
+                if (i < joint_sensor.current_size()) {
+                    sample.current     = joint_sensor.current(i);
+                    sample.has_current = true;
+                }
+
+                parsed_samples.push_back(std::move(sample));
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(data_mtx_);
+            latest_samples_.swap(parsed_samples);
+        }
+
+        message_count_.fetch_add(1, std::memory_order_acq_rel);
+        last_msg_ns_.store(nowSteadyNs(), std::memory_order_release);
+    }
+
+    std::unique_ptr<galbot::embosa::Node> node_;
+    std::shared_ptr<galbot::embosa::SerializationReader<galbot::singorix_proto::SingoriXSensor>> reader_;
+
+    mutable std::mutex data_mtx_;
+    std::vector<SensorJointSample> latest_samples_;
+
+    std::atomic<uint64_t> message_count_{0};
+    std::atomic<long long> last_msg_ns_{0};
+    bool embosa_inited_ = false;
+    bool running_       = false;
+};
+
+static bool isMasterArmGroup(const std::string& group_name) {
+    return group_name == "left_arm" || group_name == "right_arm";
+}
 
 // 相机、鼠标控制（保持原样）
 // ...（直接拷贝你原有 Camera 类）...
@@ -632,6 +798,41 @@ class Robot {
         }
         updateTransforms();
     }
+
+    bool setJointPositionByName(const std::string& joint_name, float new_position) {
+        for (auto& js : joint_states) {
+            if (js.name == joint_name) {
+                js.position = new_position;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    size_t applyJointSamples(const std::vector<SensorJointSample>& samples, bool only_master_arm = true) {
+        size_t applied = 0;
+        for (const auto& sample : samples) {
+            if (!sample.has_position || !std::isfinite(sample.position)) {
+                continue;
+            }
+            if (only_master_arm && !isMasterArmGroup(sample.group)) {
+                continue;
+            }
+            if (setJointPositionByName(sample.name, static_cast<float>(sample.position))) {
+                applied++;
+            }
+        }
+        return applied;
+    }
+
+    const JointState* findJointState(const std::string& joint_name) const {
+        for (const auto& js : joint_states) {
+            if (js.name == joint_name) {
+                return &js;
+            }
+        }
+        return nullptr;
+    }
 };
 
 // ======================== 全局 / 回调（保持原样） ========================
@@ -719,8 +920,16 @@ int main() {
     // 加载机器人（改为传入你自己的路径）
     Robot robot;
     robot.loadURDF(
-        "/home/yuxia/Workspace/SingoriX/OmniLink/singorix_omnilink/config/galbot_description/galbot_one_charlie_description/"
-        "galbot_one_charlie.urdf");
+        "/home/yuxia/Workspace/SingoriX/OmniLink/singorix_omnilink/config/galbot_description/galbot_one_golf_description/"
+        "galbot_one_golf.urdf");
+
+    MasterArmSensorSubscriber sensor_subscriber;
+    bool sensor_ready                  = sensor_subscriber.start();
+    bool use_sensor_to_drive_robot     = sensor_ready;
+    bool only_show_master_arm_groups   = true;
+    const double stale_timeout_seconds = 0.5;
+
+    std::vector<SensorJointSample> latest_sensor_samples;
 
     // 主循环
     while (!glfwWindowShouldClose(window)) {
@@ -760,9 +969,14 @@ int main() {
 
         int w, h;
         glfwGetFramebufferSize(window, &w, &h);
-        int side_panel_width = 300;
+        int side_panel_width = 460;
         int render_width     = w - side_panel_width;
         int render_height    = h;
+
+        latest_sensor_samples = sensor_subscriber.getLatestSamples();
+        if (use_sensor_to_drive_robot && !latest_sensor_samples.empty()) {
+            robot.applyJointSamples(latest_sensor_samples, true);
+        }
 
         glViewport(0, 0, render_width, render_height);
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
@@ -792,28 +1006,186 @@ int main() {
         ImGui::SetNextWindowSize(ImVec2(400, 0), ImGuiCond_FirstUseEver);
         ImGui::Begin("Robot Control", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
 
-        ImGui::Text("Robot Joint Control");
+        ImGui::Text("Teleop Master Arm Sensor Monitor");
         ImGui::Separator();
 
-        for (auto& js : robot.joint_states) {
-            if (robot.urdf_model->getJoint(js.name)->type != urdf::Joint::REVOLUTE) {
+        uint64_t msg_count = sensor_subscriber.messageCount();
+        double data_age    = sensor_subscriber.messageAgeSec();
+        bool data_fresh    = sensor_subscriber.hasRecentData(stale_timeout_seconds);
+
+        ImGui::Text("Topic:");
+        ImGui::TextWrapped("%s", MasterArmSensorSubscriber::kTopicName);
+
+        if (!sensor_ready) {
+            ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "Sensor subscriber init failed.");
+            use_sensor_to_drive_robot = false;
+        } else if (msg_count == 0) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "Status: waiting for data");
+        } else if (!data_fresh) {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Status: stale (last %.3f s ago)", data_age);
+        } else {
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Status: receiving");
+        }
+        ImGui::Text("Msg Count: %llu", static_cast<unsigned long long>(msg_count));
+
+        ImGui::Checkbox("Use sensor data to drive robot pose", &use_sensor_to_drive_robot);
+        if (!sensor_ready) {
+            use_sensor_to_drive_robot = false;
+        }
+        ImGui::Checkbox("Show only left/right arm groups", &only_show_master_arm_groups);
+
+        ImGui::Separator();
+        ImGui::Text("Joint Diagnostic");
+
+        int invalid_count   = 0;
+        int out_range_count = 0;
+        int no_match_count  = 0;
+        int shown_count     = 0;
+
+        for (const auto& sample : latest_sensor_samples) {
+            if (only_show_master_arm_groups && !isMasterArmGroup(sample.group)) {
                 continue;
             }
+            shown_count++;
 
-            float old_position = js.position;
-            // <<< MOD: 将 joint limits（radian）转换为 degree 传给 SliderAngle 的 min/max
-            ImGui::SliderAngle(js.name.c_str(), &js.position, glm::degrees(js.min_angle), glm::degrees(js.max_angle));
-            if (old_position != js.position) {
-                // 变动时只重新计算变换（updateTransforms 已经只做重算）
-                robot.updateTransforms();
+            const JointState* js = robot.findJointState(sample.name);
+            bool invalid_value   = !sample.has_position || !std::isfinite(sample.position);
+            if (invalid_value) {
+                invalid_count++;
+                continue;
+            }
+            if (!js) {
+                no_match_count++;
+                continue;
+            }
+            const double margin = 0.01;
+            if (sample.position < js->min_angle - margin || sample.position > js->max_angle + margin) {
+                out_range_count++;
             }
         }
 
+        ImGui::Text("Shown: %d  Invalid: %d  OutOfRange: %d  NoURDFMatch: %d", shown_count, invalid_count, out_range_count, no_match_count);
+
+        ImGuiTableFlags table_flags =
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
+        if (ImGui::BeginTable("sensor_joint_table", 9, table_flags, ImVec2(-FLT_MIN, 280.0f))) {
+            ImGui::TableSetupColumn("Group");
+            ImGui::TableSetupColumn("Joint");
+            ImGui::TableSetupColumn("Pos(rad)");
+            ImGui::TableSetupColumn("Pos(deg)");
+            ImGui::TableSetupColumn("Vel");
+            ImGui::TableSetupColumn("Eff");
+            ImGui::TableSetupColumn("Cur");
+            ImGui::TableSetupColumn("Limit(rad)");
+            ImGui::TableSetupColumn("Health");
+            ImGui::TableHeadersRow();
+
+            for (const auto& sample : latest_sensor_samples) {
+                if (only_show_master_arm_groups && !isMasterArmGroup(sample.group)) {
+                    continue;
+                }
+
+                const JointState* js = robot.findJointState(sample.name);
+                bool invalid_value   = !sample.has_position || !std::isfinite(sample.position);
+                bool out_of_range    = false;
+                if (js && !invalid_value) {
+                    const double margin = 0.01;
+                    out_of_range        = sample.position < js->min_angle - margin || sample.position > js->max_angle + margin;
+                }
+
+                const char* health_text = "OK";
+                ImVec4 health_color     = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+                if (invalid_value) {
+                    health_text  = "INVALID";
+                    health_color = ImVec4(1.0f, 0.35f, 0.35f, 1.0f);
+                } else if (!js) {
+                    health_text  = "NO_URDF_MATCH";
+                    health_color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
+                } else if (out_of_range) {
+                    health_text  = "OUT_OF_RANGE";
+                    health_color = ImVec4(1.0f, 0.5f, 0.2f, 1.0f);
+                }
+
+                ImGui::TableNextRow();
+
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(sample.group.c_str());
+
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextUnformatted(sample.name.c_str());
+
+                ImGui::TableSetColumnIndex(2);
+                if (sample.has_position && std::isfinite(sample.position)) {
+                    ImGui::Text("%.4f", sample.position);
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
+
+                ImGui::TableSetColumnIndex(3);
+                if (sample.has_position && std::isfinite(sample.position)) {
+                    ImGui::Text("%.2f", glm::degrees(static_cast<float>(sample.position)));
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
+
+                ImGui::TableSetColumnIndex(4);
+                if (sample.has_velocity && std::isfinite(sample.velocity)) {
+                    ImGui::Text("%.4f", sample.velocity);
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
+
+                ImGui::TableSetColumnIndex(5);
+                if (sample.has_effort && std::isfinite(sample.effort)) {
+                    ImGui::Text("%.4f", sample.effort);
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
+
+                ImGui::TableSetColumnIndex(6);
+                if (sample.has_current && std::isfinite(sample.current)) {
+                    ImGui::Text("%.4f", sample.current);
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
+
+                ImGui::TableSetColumnIndex(7);
+                if (js) {
+                    ImGui::Text("[%.2f, %.2f]", js->min_angle, js->max_angle);
+                } else {
+                    ImGui::TextUnformatted("-");
+                }
+
+                ImGui::TableSetColumnIndex(8);
+                ImGui::TextColored(health_color, "%s", health_text);
+            }
+
+            ImGui::EndTable();
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Manual Mode (for local debug)");
+        if (use_sensor_to_drive_robot) {
+            ImGui::TextDisabled("Disable sensor driving to use local sliders.");
+        } else {
+            for (auto& js : robot.joint_states) {
+                auto joint = robot.urdf_model->getJoint(js.name);
+                if (!joint || joint->type != urdf::Joint::REVOLUTE) {
+                    continue;
+                }
+
+                float old_position = js.position;
+                ImGui::SliderAngle(js.name.c_str(), &js.position, glm::degrees(js.min_angle), glm::degrees(js.max_angle));
+                if (old_position != js.position) {
+                    robot.updateTransforms();
+                }
+            }
+        }
+
+        ImGui::Separator();
         ImGui::Text("Camera Controls:");
-        ImGui::Text("Right Mouse Button + Drag: Rotate");
+        ImGui::Text("Left Mouse Button + Drag: Rotate");
         ImGui::Text("Mouse Wheel: Zoom");
-        // ImGui::Text("Current Position: (%.2f, %.2f, %.2f)", camera.position.x, camera.position.y, camera.position.z);
-        // ImGui::Text("Yaw: %.2f, Pitch: %.2f", camera.yaw, camera.pitch);
 
         ImGui::End();
         ImGui::Render();
@@ -824,6 +1196,8 @@ int main() {
 
         glfwSwapBuffers(window);
     }
+
+    sensor_subscriber.stop();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
