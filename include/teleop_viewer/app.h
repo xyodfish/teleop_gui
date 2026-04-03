@@ -42,6 +42,39 @@ class RobotViewerApp {
         bool active         = true;
         bool acknowledged   = false;
     };
+    struct FrameLayout {
+        int window_width        = 0;
+        int window_height       = 0;
+        int min_sidebar_width   = 0;
+        int max_sidebar_width   = 0;
+        int active_sidebar_width = 0;
+        int render_width        = 0;
+        int render_height       = 0;
+    };
+    struct FrameData {
+        double now_sec      = 0.0;
+        uint64_t msg_count  = 0;
+        double data_age     = -1.0;
+        bool data_fresh     = false;
+        uint64_t joy_msg_count = 0;
+        double joy_data_age    = -1.0;
+        bool joy_data_fresh    = false;
+        uint64_t state_msg_count = 0;
+        double state_data_age    = -1.0;
+        bool state_data_fresh    = false;
+        std::unordered_map<std::string, JointDiagState> diag_map;
+        int invalid_count   = 0;
+        int out_range_count = 0;
+        int no_match_count  = 0;
+        int shown_count     = 0;
+    };
+    struct RcCommandLogEntry {
+        double time_s = 0.0;
+        std::string source;
+        bool ok = false;
+        int active_locks = 0;
+        std::string note;
+    };
 
     static void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset);
     void onScroll(double yoffset);
@@ -61,6 +94,12 @@ class RobotViewerApp {
     void startRecording(double now_sec);
     void stopRecording();
     void recordCurrentSamples(double now_sec, const std::unordered_map<std::string, JointDiagState>& diag_map);
+    FrameLayout computeFrameLayout();
+    FrameData collectFrameData(double now_sec);
+    void renderSceneFrame(const FrameLayout& layout);
+    void renderSidebar(const FrameLayout& layout, const FrameData& frame);
+    bool publishRcVirtualJoyCommand(const std::string& source, const std::string& note = "");
+    void pushRcCommandLog(double now_sec, const std::string& source, bool ok, int active_locks, const std::string& note);
 
     ViewerConfig config_;
 
@@ -72,6 +111,9 @@ class RobotViewerApp {
     SensorSubscriber sensor_subscriber_;
 
     bool sensor_ready_                = false;
+    bool joy_ready_                   = false;
+    bool omnilink_state_ready_        = false;
+    bool rc_virtual_joy_ready_        = false;
     bool use_sensor_to_drive_robot_   = true;
     bool only_show_master_arm_groups_ = true;
     bool fix_base_like_mujoco_        = true;
@@ -81,6 +123,18 @@ class RobotViewerApp {
     bool sidebar_collapsed_ = false;
 
     std::vector<SensorJointSample> latest_sensor_samples_;
+    std::vector<JoyButtonSample> latest_joy_buttons_;
+    std::vector<JoyAxisSample> latest_joy_axes_;
+    std::vector<JoyButtonSample> latest_state_buttons_;
+    std::vector<JoyAxisSample> latest_state_axes_;
+    std::unordered_map<std::string, int> rc_virtual_joy_command_;
+    std::unordered_map<std::string, double> rc_virtual_joy_changed_at_s_;
+    double last_rc_virtual_joy_send_s_ = -1.0;
+    uint64_t rc_virtual_joy_send_count_ = 0;
+    std::string rc_virtual_joy_last_error_;
+    float rc_virtual_joy_effect_timeout_s_ = 1.0f;
+    std::deque<RcCommandLogEntry> rc_virtual_joy_logs_;
+    size_t rc_virtual_joy_log_limit_ = 30;
     std::unordered_map<std::string, std::deque<float>> waveform_history_;
     std::string selected_wave_group_;
     std::string selected_wave_joint_;

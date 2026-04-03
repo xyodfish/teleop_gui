@@ -23,6 +23,18 @@ void ReadVec3(const YAML::Node& node, const char* key, glm::vec3& out) {
     out.z = node[key][2].as<float>();
 }
 
+void ReadStringList(const YAML::Node& node, const char* key, std::vector<std::string>& out) {
+    if (!node || !node[key] || !node[key].IsSequence()) {
+        return;
+    }
+    out.clear();
+    for (const auto& item : node[key]) {
+        if (item.IsScalar()) {
+            out.push_back(item.as<std::string>());
+        }
+    }
+}
+
 }  // namespace
 
 ViewerConfig ViewerConfig::LoadFromFile(const std::string& yaml_path, bool* loaded_ok) {
@@ -40,6 +52,12 @@ ViewerConfig ViewerConfig::LoadFromFile(const std::string& yaml_path, bool* load
 
         ReadScalar(root["sensor"], "topic", cfg.sensor.topic);
         ReadScalar(root["sensor"], "node_name", cfg.sensor.node_name);
+        ReadScalar(root["joy"], "topic", cfg.joy.topic);
+        ReadScalar(root["omnilink_bridge"], "enable", cfg.omnilink_bridge.enable);
+        ReadScalar(root["omnilink_bridge"], "rc_virtual_joy_topic", cfg.omnilink_bridge.rc_virtual_joy_topic);
+        ReadScalar(root["omnilink_bridge"], "state_topic", cfg.omnilink_bridge.state_topic);
+        ReadStringList(root["omnilink_bridge"], "rc_button_names", cfg.omnilink_bridge.rc_button_names);
+        ReadScalar(root["omnilink_bridge"], "command_repeat_interval_sec", cfg.omnilink_bridge.command_repeat_interval_sec);
 
         ReadScalar(root["camera"], "distance", cfg.camera.distance);
         ReadScalar(root["camera"], "yaw", cfg.camera.yaw);

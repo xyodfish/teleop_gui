@@ -10,6 +10,25 @@ sensor:
   topic: "singorix_omnilink/scaled_device_robot_data"
   node_name: "singorix_teleop_gui_sensor_monitor"
 
+joy:
+  topic: "singorix_omnilink/joy"
+
+omnilink_bridge:
+  enable: true
+  rc_virtual_joy_topic: "omnilink_comm/rc_common_cmd"
+  state_topic: "singorix_omnilink/states"
+  rc_button_names:
+    [
+      "fix_height",
+      "head_angle_fix",
+      "chassis_fix",
+      "left_arm_fix",
+      "right_arm_fix",
+      "left_gripper_fix",
+      "right_gripper_fix",
+    ]
+  command_repeat_interval_sec: 0.3
+
 camera:
   distance: 3.0
   yaw: 0.0

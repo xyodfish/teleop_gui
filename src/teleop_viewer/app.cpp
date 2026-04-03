@@ -94,6 +94,228 @@ const char* WaveMetricKeySuffix(int metric_index) {
     }
 }
 
+const char* JoyButtonStateText(int status) {
+    switch (status) {
+        case 0:
+            return "UP";
+        case 1:
+            return "DOWN";
+        case 2:
+            return "LONG";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+ImVec4 JoyButtonStateColor(int status) {
+    if (status == 1 || status == 2) {
+        return ImVec4(0.25f, 0.95f, 0.35f, 1.0f);
+    }
+    return ImVec4(0.78f, 0.78f, 0.78f, 1.0f);
+}
+
+const char* OmnilinkStateNameZh(const std::string& name) {
+    if (name == "TeleopDeviceConnection") return "遥操设备连接";
+    if (name == "LeftArmOperationState") return "左臂状态";
+    if (name == "RightArmOperationState") return "右臂状态";
+    if (name == "HeadOperationState") return "头部状态";
+    if (name == "LegOperationState") return "腿部状态";
+    if (name == "ChassisOperationState") return "底盘状态";
+    if (name == "LeftGripperOperationState") return "左夹爪状态";
+    if (name == "RightGripperOperationState") return "右夹爪状态";
+    if (name == "RobotStates") return "机器人总状态";
+    return "未定义状态";
+}
+
+const char* OmnilinkStateValueZh(const std::string& state_name, int status) {
+    if (state_name == "TeleopDeviceConnection") {
+        if (status == 1) return "在线";
+        if (status == 0) return "离线";
+        if (status == 3) return "急停";
+        return "未知";
+    }
+    if (state_name == "RobotStates") {
+        if (status == 0) return "未连接";
+        if (status == 1) return "连接中";
+        if (status == 2) return "连接丢失";
+        if (status == 3) return "错误";
+        return "未知";
+    }
+    if (state_name == "LeftArmOperationState" || state_name == "RightArmOperationState") {
+        if (status == 0) return "锁定";
+        if (status == 1) return "关节同步";
+        if (status == 2) return "关节接管";
+        if (status == 3) return "笛卡尔接管";
+        return "未知";
+    }
+    if (state_name == "HeadOperationState") {
+        return status == 0 ? "无操作" : (status == 1 ? "遥操作中" : "未知");
+    }
+    if (state_name == "LegOperationState") {
+        if (status == 0) return "无操作";
+        if (status == 1) return "高度调整";
+        if (status == 2) return "前后调整";
+        if (status == 3) return "腰部调整";
+        return "未知";
+    }
+    if (state_name == "ChassisOperationState") {
+        if (status == 0) return "无操作";
+        if (status == 1) return "线速度控制";
+        if (status == 2) return "旋转控制";
+        if (status == 3) return "线旋混合";
+        return "未知";
+    }
+    if (state_name == "LeftGripperOperationState" || state_name == "RightGripperOperationState") {
+        return status == 0 ? "无操作" : (status == 1 ? "宽度同步" : "未知");
+    }
+    return "未知";
+}
+
+ImVec4 OmnilinkStateColor(const std::string& state_name, int status) {
+    if (state_name == "TeleopDeviceConnection" || state_name == "RobotStates") {
+        if (status == 1) return ImVec4(0.35f, 1.0f, 0.45f, 1.0f);
+        if (status == 0) return ImVec4(1.0f, 0.7f, 0.2f, 1.0f);
+        return ImVec4(1.0f, 0.35f, 0.35f, 1.0f);
+    }
+    if (status == 0) {
+        return ImVec4(0.72f, 0.72f, 0.75f, 1.0f);
+    }
+    return ImVec4(0.35f, 1.0f, 0.45f, 1.0f);
+}
+
+std::string FixCmdToStateName(const std::string& cmd) {
+    if (cmd == "fix_height") return "LegOperationState";
+    if (cmd == "head_angle_fix") return "HeadOperationState";
+    if (cmd == "chassis_fix") return "ChassisOperationState";
+    if (cmd == "left_arm_fix") return "LeftArmOperationState";
+    if (cmd == "right_arm_fix") return "RightArmOperationState";
+    if (cmd == "left_gripper_fix") return "LeftGripperOperationState";
+    if (cmd == "right_gripper_fix") return "RightGripperOperationState";
+    return std::string();
+}
+
+void ApplyTeleopVisualStyle() {
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 8.0f;
+    style.ChildRounding = 8.0f;
+    style.FrameRounding = 6.0f;
+    style.ScrollbarRounding = 8.0f;
+    style.GrabRounding = 6.0f;
+    style.TabRounding = 6.0f;
+    style.WindowPadding = ImVec2(12.0f, 10.0f);
+    style.FramePadding = ImVec2(8.0f, 6.0f);
+    style.ItemSpacing = ImVec2(8.0f, 7.0f);
+    style.ItemInnerSpacing = ImVec2(6.0f, 5.0f);
+    style.IndentSpacing = 16.0f;
+    style.WindowBorderSize = 1.0f;
+    style.ChildBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.10f, 0.13f, 1.00f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.10f, 0.12f, 0.16f, 0.98f);
+    colors[ImGuiCol_Border] = ImVec4(0.23f, 0.30f, 0.37f, 0.85f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.14f, 0.18f, 0.24f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.19f, 0.25f, 0.32f, 1.00f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.22f, 0.29f, 0.38f, 1.00f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.09f, 0.13f, 0.18f, 1.00f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.12f, 0.18f, 0.25f, 1.00f);
+    colors[ImGuiCol_Header] = ImVec4(0.17f, 0.25f, 0.33f, 1.00f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.22f, 0.33f, 0.44f, 1.00f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.24f, 0.36f, 0.47f, 1.00f);
+    colors[ImGuiCol_Button] = ImVec4(0.16f, 0.30f, 0.43f, 1.00f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.21f, 0.39f, 0.54f, 1.00f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.14f, 0.27f, 0.37f, 1.00f);
+    colors[ImGuiCol_CheckMark] = ImVec4(0.22f, 0.89f, 0.80f, 1.00f);
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.23f, 0.76f, 0.92f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.18f, 0.63f, 0.80f, 1.00f);
+    colors[ImGuiCol_Separator] = ImVec4(0.24f, 0.31f, 0.38f, 0.85f);
+    colors[ImGuiCol_ResizeGrip] = ImVec4(0.18f, 0.48f, 0.62f, 0.40f);
+    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.25f, 0.63f, 0.79f, 0.78f);
+    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.21f, 0.56f, 0.72f, 1.00f);
+    colors[ImGuiCol_Tab] = ImVec4(0.13f, 0.19f, 0.25f, 1.00f);
+    colors[ImGuiCol_TabHovered] = ImVec4(0.18f, 0.29f, 0.40f, 1.00f);
+    colors[ImGuiCol_TabActive] = ImVec4(0.17f, 0.27f, 0.36f, 1.00f);
+    colors[ImGuiCol_TableRowBgAlt] = ImVec4(0.11f, 0.14f, 0.19f, 1.00f);
+}
+
+void DrawStatusBadge(const char* id, const char* label, const ImVec4& color) {
+    ImGui::PushID(id);
+    ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImVec2 t = ImGui::CalcTextSize(label);
+    ImVec2 size(t.x + 12.0f, t.y + 6.0f);
+    ImGui::InvisibleButton("##badge", size);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p1 = ImVec2(p0.x + size.x, p0.y + size.y);
+    ImU32 fill = ImColor(color.x, color.y, color.z, 0.28f);
+    ImU32 border = ImColor(color.x, color.y, color.z, 0.80f);
+    dl->AddRectFilled(p0, p1, fill, 8.0f);
+    dl->AddRect(p0, p1, border, 8.0f, 0, 1.2f);
+    dl->AddText(ImVec2(p0.x + 6.0f, p0.y + 3.0f), ImColor(color), label);
+    ImGui::PopID();
+}
+
+void DrawMiniStatCard(const char* id, const char* title, const std::string& value, const ImVec4& accent, float width) {
+    ImGui::PushID(id);
+    ImGui::BeginChild("##mini_stat", ImVec2(width, 58.0f), true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove);
+    ImVec2 p0 = ImGui::GetItemRectMin();
+    ImVec2 p1 = ImGui::GetItemRectMax();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(p0.x + 1.0f, p0.y + 1.0f), ImVec2(p0.x + 4.0f, p1.y - 1.0f), ImColor(accent), 3.0f);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 3.0f);
+    ImGui::TextDisabled("%s", title);
+    ImGui::TextColored(ImVec4(0.90f, 0.96f, 1.0f, 1.0f), "%s", value.c_str());
+    ImGui::EndChild();
+    ImGui::PopID();
+}
+
+void PushSectionHeaderStyle() {
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.24f, 0.33f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.21f, 0.32f, 0.44f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.19f, 0.30f, 0.40f, 1.0f));
+}
+
+void PopSectionHeaderStyle() { ImGui::PopStyleColor(3); }
+
+double GetAxisValue(const std::map<std::string, double>& axis_map, const std::vector<std::string>& names, bool* found = nullptr) {
+    for (const auto& n : names) {
+        auto it = axis_map.find(n);
+        if (it != axis_map.end() && std::isfinite(it->second)) {
+            if (found) {
+                *found = true;
+            }
+            return it->second;
+        }
+    }
+    if (found) {
+        *found = false;
+    }
+    return 0.0;
+}
+
+void DrawJoyStickPad(const char* id, float x, float y, ImVec2 size = ImVec2(130, 130)) {
+    ImGui::InvisibleButton(id, size);
+    ImVec2 p_min = ImGui::GetItemRectMin();
+    ImVec2 p_max = ImGui::GetItemRectMax();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    ImVec2 center((p_min.x + p_max.x) * 0.5f, (p_min.y + p_max.y) * 0.5f);
+    float radius = std::min(size.x, size.y) * 0.42f;
+
+    dl->AddRectFilled(p_min, p_max, IM_COL32(22, 24, 28, 255), 4.0f);
+    dl->AddRect(p_min, p_max, IM_COL32(85, 85, 95, 255), 4.0f);
+    dl->AddCircle(center, radius, IM_COL32(160, 160, 170, 255), 48, 1.0f);
+    dl->AddLine(ImVec2(center.x - radius, center.y), ImVec2(center.x + radius, center.y), IM_COL32(65, 65, 75, 255), 1.0f);
+    dl->AddLine(ImVec2(center.x, center.y - radius), ImVec2(center.x, center.y + radius), IM_COL32(65, 65, 75, 255), 1.0f);
+
+    float nx = std::clamp(x, -1.0f, 1.0f);
+    float ny = std::clamp(y, -1.0f, 1.0f);
+    ImVec2 knob(center.x + nx * radius, center.y - ny * radius);
+    dl->AddCircleFilled(knob, 6.5f, IM_COL32(95, 205, 255, 255), 24);
+}
+
 void DrawWaveformWithAxes(const char* id, const std::vector<float>& values, float min_value, float max_value, ImVec2 size) {
     float width = size.x > 0.0f ? size.x : ImGui::GetContentRegionAvail().x;
     float height = size.y > 0.0f ? size.y : 180.0f;
@@ -196,6 +418,10 @@ RobotViewerApp::RobotViewerApp(ViewerConfig config) : config_(std::move(config))
     alarm_trigger_frames_    = std::max(1, config_.ui.alarm_trigger_frames);
     record_output_dir_       = config_.ui.record_output_dir.empty() ? "logs" : config_.ui.record_output_dir;
     app_start_time_          = std::chrono::steady_clock::now();
+
+    for (const auto& name : config_.omnilink_bridge.rc_button_names) {
+        rc_virtual_joy_command_[name] = 0;
+    }
 }
 
 RobotViewerApp::~RobotViewerApp() { shutdown(); }
@@ -246,7 +472,7 @@ bool RobotViewerApp::initImGui() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    ImGui::StyleColorsDark();
+    ApplyTeleopVisualStyle();
 
     const ImWchar* glyph_ranges = io.Fonts->GetGlyphRangesChineseFull();
     float font_size = std::max(12.0f, config_.ui.cjk_font_size);
@@ -333,6 +559,16 @@ bool RobotViewerApp::initScene() {
     sensor_ready_ = sensor_subscriber_.start(config_.sensor.topic, config_.sensor.node_name);
     if (!sensor_ready_) {
         use_sensor_to_drive_robot_ = false;
+    }
+    joy_ready_ = sensor_ready_ && sensor_subscriber_.startJoy(config_.joy.topic);
+    if (config_.omnilink_bridge.enable) {
+        omnilink_state_ready_ =
+            sensor_ready_ && sensor_subscriber_.startOmnilinkStates(config_.omnilink_bridge.state_topic);
+        rc_virtual_joy_ready_ =
+            sensor_ready_ && sensor_subscriber_.startRcVirtualJoyPublisher(config_.omnilink_bridge.rc_virtual_joy_topic);
+    } else {
+        omnilink_state_ready_ = false;
+        rc_virtual_joy_ready_ = false;
     }
 
     scene_.setFixedBaseMode(fix_base_like_mujoco_);
@@ -627,17 +863,149 @@ void RobotViewerApp::recordCurrentSamples(double now_sec, const std::unordered_m
     }
 }
 
+RobotViewerApp::FrameLayout RobotViewerApp::computeFrameLayout() {
+    FrameLayout layout;
+    glfwGetFramebufferSize(window_, &layout.window_width, &layout.window_height);
+
+    int min_render_width   = 200;
+    layout.max_sidebar_width = std::max(260, layout.window_width - min_render_width);
+    layout.min_sidebar_width = std::min(420, layout.max_sidebar_width);
+    side_panel_width_ = std::clamp(side_panel_width_, layout.min_sidebar_width, layout.max_sidebar_width);
+
+    layout.active_sidebar_width = sidebar_collapsed_ ? collapsed_sidebar_width_ : side_panel_width_;
+    layout.render_width  = std::max(200, layout.window_width - layout.active_sidebar_width);
+    layout.render_height = layout.window_height;
+    return layout;
+}
+
+RobotViewerApp::FrameData RobotViewerApp::collectFrameData(double now_sec) {
+    FrameData frame;
+    frame.now_sec = now_sec;
+    frame.msg_count = sensor_subscriber_.messageCount();
+    frame.data_age = sensor_subscriber_.messageAgeSec();
+    frame.data_fresh = sensor_subscriber_.hasRecentData(config_.ui.stale_timeout_seconds);
+    frame.joy_msg_count = sensor_subscriber_.joyMessageCount();
+    frame.joy_data_age = sensor_subscriber_.joyMessageAgeSec();
+    frame.joy_data_fresh = sensor_subscriber_.joyHasRecentData(config_.ui.stale_timeout_seconds);
+    frame.state_msg_count = sensor_subscriber_.stateMessageCount();
+    frame.state_data_age = sensor_subscriber_.stateMessageAgeSec();
+    frame.state_data_fresh = sensor_subscriber_.stateHasRecentData(config_.ui.stale_timeout_seconds);
+
+    latest_sensor_samples_ = sensor_subscriber_.latestSamples();
+    latest_joy_buttons_ = sensor_subscriber_.latestJoyButtons();
+    latest_joy_axes_ = sensor_subscriber_.latestJoyAxes();
+    latest_state_buttons_ = sensor_subscriber_.latestStateButtons();
+    latest_state_axes_ = sensor_subscriber_.latestStateAxes();
+    updateInputRate(frame.msg_count, now_sec);
+
+    frame.diag_map.reserve(latest_sensor_samples_.size());
+    for (const auto& sample : latest_sensor_samples_) {
+        if (only_show_master_arm_groups_ && !IsMasterArmGroup(sample.group)) {
+            continue;
+        }
+
+        frame.shown_count++;
+        JointDiagState diag = evaluateJoint(sample);
+        const std::string key = composeJointKey(sample);
+        frame.diag_map[key] = diag;
+
+        if (diag.invalid) {
+            frame.invalid_count++;
+        } else if (diag.no_match) {
+            frame.no_match_count++;
+        } else if (diag.out_of_range) {
+            frame.out_range_count++;
+        }
+        updateAlarmForJoint(sample, diag, now_sec);
+
+        auto append_metric = [&](bool has_value, double value, const char* suffix) {
+            if (!has_value || !std::isfinite(value)) {
+                return;
+            }
+            std::string waveform_key = sample.group + "/" + sample.name + "/" + suffix;
+            auto& series = waveform_history_[waveform_key];
+            series.push_back(static_cast<float>(value));
+            while (static_cast<int>(series.size()) > waveform_history_size_) {
+                series.pop_front();
+            }
+        };
+
+        append_metric(sample.has_position, sample.position, "position");
+        append_metric(sample.has_velocity, sample.velocity, "velocity");
+        append_metric(sample.has_effort, sample.effort, "effort");
+        append_metric(sample.has_current, sample.current, "current");
+    }
+
+    if (recording_) {
+        recordCurrentSamples(now_sec, frame.diag_map);
+    }
+    if (use_sensor_to_drive_robot_ && !latest_sensor_samples_.empty()) {
+        scene_.applyJointSamples(latest_sensor_samples_, only_show_master_arm_groups_);
+    }
+    return frame;
+}
+
+void RobotViewerApp::pushRcCommandLog(double now_sec, const std::string& source, bool ok, int active_locks, const std::string& note) {
+    RcCommandLogEntry item;
+    item.time_s = now_sec;
+    item.source = source;
+    item.ok = ok;
+    item.active_locks = active_locks;
+    item.note = note;
+    rc_virtual_joy_logs_.push_front(std::move(item));
+    while (rc_virtual_joy_logs_.size() > rc_virtual_joy_log_limit_) {
+        rc_virtual_joy_logs_.pop_back();
+    }
+}
+
+bool RobotViewerApp::publishRcVirtualJoyCommand(const std::string& source, const std::string& note) {
+    std::vector<std::pair<std::string, int>> buttons;
+    buttons.reserve(config_.omnilink_bridge.rc_button_names.size());
+    int active_locks = 0;
+    for (const auto& name : config_.omnilink_bridge.rc_button_names) {
+        int value = 0;
+        auto it = rc_virtual_joy_command_.find(name);
+        if (it != rc_virtual_joy_command_.end()) {
+            value = it->second;
+        }
+        if (value == 1) {
+            active_locks++;
+        }
+        buttons.push_back({name, value});
+    }
+
+    double now_sec = nowSec();
+    bool ok = sensor_subscriber_.publishRcVirtualJoyButtons(buttons);
+    if (ok) {
+        last_rc_virtual_joy_send_s_ = now_sec;
+        rc_virtual_joy_send_count_++;
+        rc_virtual_joy_last_error_.clear();
+    } else {
+        rc_virtual_joy_last_error_ = "发送失败：命令写通道未就绪";
+    }
+    pushRcCommandLog(now_sec, source, ok, active_locks, note);
+    return ok;
+}
+
+void RobotViewerApp::renderSceneFrame(const FrameLayout& layout) {
+    glViewport(0, 0, layout.render_width, layout.render_height);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram(shader_);
+    glm::mat4 projection =
+        glm::perspective(glm::radians(45.0f), (float)layout.render_width / (float)layout.render_height, 0.01f, 100.0f);
+    glm::mat4 view = camera_.viewMatrix();
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "view"), 1, GL_FALSE, glm::value_ptr(view));
+
+    scene_.setFixedBaseMode(fix_base_like_mujoco_);
+    scene_.updateTransforms();
+    scene_.draw(shader_);
+}
+
 int RobotViewerApp::run() {
-    if (!initWindow()) {
-        return -1;
-    }
-    if (!initImGui()) {
-        return -1;
-    }
-    if (!initShader()) {
-        return -1;
-    }
-    if (!initScene()) {
+    if (!initWindow() || !initImGui() || !initShader() || !initScene()) {
         return -1;
     }
 
@@ -651,579 +1019,17 @@ int RobotViewerApp::run() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        int w = 0;
-        int h = 0;
-        glfwGetFramebufferSize(window_, &w, &h);
-
-        int min_render_width  = 200;
-        int max_sidebar_width = std::max(260, w - min_render_width);
-        int min_sidebar_width = std::min(420, max_sidebar_width);
-        side_panel_width_     = std::clamp(side_panel_width_, min_sidebar_width, max_sidebar_width);
-
-        int active_sidebar_width = sidebar_collapsed_ ? collapsed_sidebar_width_ : side_panel_width_;
-        int render_width         = std::max(200, w - active_sidebar_width);
-        int render_height        = h;
-
-        double now_sec       = nowSec();
-        uint64_t msg_count   = sensor_subscriber_.messageCount();
-        double data_age      = sensor_subscriber_.messageAgeSec();
-        bool data_fresh      = sensor_subscriber_.hasRecentData(config_.ui.stale_timeout_seconds);
-        latest_sensor_samples_ = sensor_subscriber_.latestSamples();
-        updateInputRate(msg_count, now_sec);
-
-        std::unordered_map<std::string, JointDiagState> diag_map;
-        diag_map.reserve(latest_sensor_samples_.size());
-        int invalid_count   = 0;
-        int out_range_count = 0;
-        int no_match_count  = 0;
-        int shown_count     = 0;
-
-        for (const auto& sample : latest_sensor_samples_) {
-            if (only_show_master_arm_groups_ && !IsMasterArmGroup(sample.group)) {
-                continue;
-            }
-
-            shown_count++;
-            JointDiagState diag = evaluateJoint(sample);
-            const std::string key = composeJointKey(sample);
-            diag_map[key] = diag;
-
-            if (diag.invalid) {
-                invalid_count++;
-            } else if (diag.no_match) {
-                no_match_count++;
-            } else if (diag.out_of_range) {
-                out_range_count++;
-            }
-            updateAlarmForJoint(sample, diag, now_sec);
-
-            auto append_metric = [&](bool has_value, double value, const char* suffix) {
-                if (!has_value || !std::isfinite(value)) {
-                    return;
-                }
-                std::string key = sample.group + "/" + sample.name + "/" + suffix;
-                auto& series     = waveform_history_[key];
-                series.push_back(static_cast<float>(value));
-                while (static_cast<int>(series.size()) > waveform_history_size_) {
-                    series.pop_front();
-                }
-            };
-
-            append_metric(sample.has_position, sample.position, "position");
-            append_metric(sample.has_velocity, sample.velocity, "velocity");
-            append_metric(sample.has_effort, sample.effort, "effort");
-            append_metric(sample.has_current, sample.current, "current");
-        }
-
-        if (recording_) {
-            recordCurrentSamples(now_sec, diag_map);
-        }
-
-        if (use_sensor_to_drive_robot_ && !latest_sensor_samples_.empty()) {
-            scene_.applyJointSamples(latest_sensor_samples_, only_show_master_arm_groups_);
-        }
-
-        glViewport(0, 0, render_width, render_height);
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        glUseProgram(shader_);
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)render_width / (float)render_height, 0.01f, 100.0f);
-        glm::mat4 view       = camera_.viewMatrix();
-        glUniformMatrix4fv(glGetUniformLocation(shader_, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(glGetUniformLocation(shader_, "view"), 1, GL_FALSE, glm::value_ptr(view));
-
-        scene_.setFixedBaseMode(fix_base_like_mujoco_);
-        scene_.updateTransforms();
-        scene_.draw(shader_);
-
-        glViewport(w - active_sidebar_width, 0, active_sidebar_width, h);
-        glDisable(GL_DEPTH_TEST);
-        ImGui::SetNextWindowPos(ImVec2(w - active_sidebar_width, 0), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(active_sidebar_width, h));
-
-        if (sidebar_collapsed_) {
-            ImGui::Begin("侧边栏折叠按钮", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
-            ImGui::SetCursorPos(ImVec2(7, 10));
-            if (ImGui::ArrowButton("##expand_sidebar", ImGuiDir_Left)) {
-                sidebar_collapsed_ = false;
-            }
-            ImGui::End();
-        } else {
-            ImGui::Begin("机器人控制", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove);
-
-            if (ImGui::ArrowButton("##collapse_sidebar", ImGuiDir_Right)) {
-                sidebar_collapsed_ = true;
-            }
-            ImGui::SameLine();
-            ImGui::Text("遥操作主臂传感器监控");
-
-            ImGui::PushItemWidth(-1.0f);
-            ImGui::DragInt("侧边栏宽度", &side_panel_width_, config_.ui.sidebar_width_drag_speed, min_sidebar_width,
-                           max_sidebar_width, "%d px");
-            ImGui::PopItemWidth();
-            ImGui::Separator();
-
-            ImGui::Text("Topic：");
-            ImGui::TextWrapped("%s", config_.sensor.topic.c_str());
-
-            if (!sensor_ready_) {
-                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "传感器订阅初始化失败。");
-                use_sensor_to_drive_robot_ = false;
-            } else if (msg_count == 0) {
-                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "状态：等待数据");
-            } else if (!data_fresh) {
-                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "状态：数据陈旧（%.3f s 前）", data_age);
-            } else {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "状态：接收中");
-            }
-            ImGui::Text("消息计数：%llu", static_cast<unsigned long long>(msg_count));
-
-            ImGui::Checkbox("使用传感器数据驱动机器人姿态", &use_sensor_to_drive_robot_);
-            if (!sensor_ready_) {
-                use_sensor_to_drive_robot_ = false;
-            }
-            ImGui::Checkbox("仅显示左右臂关节组", &only_show_master_arm_groups_);
-            ImGui::Checkbox("固定底座（Mujoco 风格）", &fix_base_like_mujoco_);
-
-            ImGui::Separator();
-            ImGui::Text("健康总览");
-            ImGui::Text("输入频率：%.1f Hz", input_rate_hz_);
-            ImGui::Text("数据时延：%.3f s", data_age >= 0.0 ? data_age : -1.0);
-
-            int health_penalty = invalid_count * 25 + out_range_count * 15 + no_match_count * 10 + (!data_fresh ? 20 : 0);
-            int health_score   = std::clamp(100 - health_penalty, 0, 100);
-            const char* health_state = "健康";
-            ImVec4 health_state_color = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
-            if (health_score < 60) {
-                health_state       = "严重";
-                health_state_color = ImVec4(1.0f, 0.35f, 0.35f, 1.0f);
-            } else if (health_score < 85) {
-                health_state       = "告警";
-                health_state_color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
-            }
-            ImGui::Text("健康评分：%d / 100", health_score);
-            ImGui::TextColored(health_state_color, "状态：%s", health_state);
-
-            ImGui::Separator();
-            ImGui::Text("会话工具");
-            if (ImGui::Button("抓取基线")) {
-                baseline_position_rad_.clear();
-                for (const auto& sample : latest_sensor_samples_) {
-                    if (only_show_master_arm_groups_ && !IsMasterArmGroup(sample.group)) {
-                        continue;
-                    }
-                    if (sample.has_position && std::isfinite(sample.position)) {
-                        baseline_position_rad_[composeJointKey(sample)] = sample.position;
-                    }
-                }
-                baseline_ready_ = !baseline_position_rad_.empty();
-                baseline_capture_s = now_sec;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("清除基线")) {
-                baseline_position_rad_.clear();
-                baseline_ready_ = false;
-            }
-
-            if (!recording_) {
-                if (ImGui::Button("开始录制 CSV")) {
-                    startRecording(now_sec);
-                }
-            } else {
-                if (ImGui::Button("停止录制 CSV")) {
-                    stopRecording();
-                }
-            }
-
-            if (baseline_ready_) {
-                ImGui::Text("基线关节数：%d（%.1f s 前抓取）", static_cast<int>(baseline_position_rad_.size()),
-                            now_sec - baseline_capture_s);
-            } else {
-                ImGui::TextDisabled("尚未抓取基线。");
-            }
-
-            if (!record_error_.empty()) {
-                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "录制错误：%s", record_error_.c_str());
-            } else if (recording_) {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "录制状态：进行中（%llu 行）",
-                                   static_cast<unsigned long long>(recorded_rows_));
-                ImGui::TextWrapped("%s", record_file_path_.c_str());
-            } else {
-                ImGui::Text("录制状态：已停止");
-                if (!record_file_path_.empty()) {
-                    ImGui::TextWrapped("最近文件：%s", record_file_path_.c_str());
-                }
-            }
-
-            ImGui::Separator();
-            ImGui::Text("关节诊断");
-
-            ImGui::Text("显示：%d  无效：%d  超限：%d  无模型匹配：%d", shown_count, invalid_count,
-                        out_range_count, no_match_count);
-
-            ImGuiTableFlags table_flags =
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
-            if (ImGui::BeginTable("sensor_joint_table", 10, table_flags, ImVec2(-FLT_MIN, 280.0f))) {
-                ImGui::TableSetupColumn("关节组");
-                ImGui::TableSetupColumn("关节");
-                ImGui::TableSetupColumn("位置(rad)");
-                ImGui::TableSetupColumn("位置(deg)");
-                ImGui::TableSetupColumn("偏差(deg)");
-                ImGui::TableSetupColumn("速度");
-                ImGui::TableSetupColumn("力矩");
-                ImGui::TableSetupColumn("电流");
-                ImGui::TableSetupColumn("限位(rad)");
-                ImGui::TableSetupColumn("健康");
-                ImGui::TableHeadersRow();
-
-                for (const auto& sample : latest_sensor_samples_) {
-                    if (only_show_master_arm_groups_ && !IsMasterArmGroup(sample.group)) {
-                        continue;
-                    }
-
-                    JointDiagState diag;
-                    auto diag_it = diag_map.find(composeJointKey(sample));
-                    if (diag_it != diag_map.end()) {
-                        diag = diag_it->second;
-                    } else {
-                        diag = evaluateJoint(sample);
-                    }
-
-                    const char* health_text = "正常";
-                    ImVec4 health_color     = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
-                    if (diag.invalid) {
-                        health_text  = "无效";
-                        health_color = ImVec4(1.0f, 0.35f, 0.35f, 1.0f);
-                    } else if (diag.no_match) {
-                        health_text  = "无URDF匹配";
-                        health_color = ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
-                    } else if (diag.out_of_range) {
-                        health_text  = "超限";
-                        health_color = ImVec4(1.0f, 0.5f, 0.2f, 1.0f);
-                    }
-
-                    ImGui::TableNextRow();
-
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(sample.group.c_str());
-
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextUnformatted(sample.name.c_str());
-
-                    ImGui::TableSetColumnIndex(2);
-                    if (sample.has_position && std::isfinite(sample.position)) {
-                        ImGui::Text("%.4f", sample.position);
-                    } else {
-                        ImGui::TextUnformatted("-");
-                    }
-
-                    ImGui::TableSetColumnIndex(3);
-                    if (sample.has_position && std::isfinite(sample.position)) {
-                        ImGui::Text("%.2f", glm::degrees(static_cast<float>(sample.position)));
-                    } else {
-                        ImGui::TextUnformatted("-");
-                    }
-
-                    ImGui::TableSetColumnIndex(4);
-                    bool has_delta = false;
-                    float delta_deg = 0.0f;
-                    auto baseline_it = baseline_position_rad_.find(composeJointKey(sample));
-                    if (baseline_ready_ && baseline_it != baseline_position_rad_.end() &&
-                        sample.has_position && std::isfinite(sample.position)) {
-                        delta_deg = glm::degrees(static_cast<float>(sample.position - baseline_it->second));
-                        has_delta = true;
-                    }
-                    if (has_delta) {
-                        if (std::abs(delta_deg) > baseline_warn_deg_) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.25f, 1.0f), "%.2f", delta_deg);
-                        } else {
-                            ImGui::Text("%.2f", delta_deg);
-                        }
-                    } else {
-                        ImGui::TextUnformatted("-");
-                    }
-
-                    ImGui::TableSetColumnIndex(5);
-                    if (sample.has_velocity && std::isfinite(sample.velocity)) {
-                        ImGui::Text("%.4f", sample.velocity);
-                    } else {
-                        ImGui::TextUnformatted("-");
-                    }
-
-                    ImGui::TableSetColumnIndex(6);
-                    if (sample.has_effort && std::isfinite(sample.effort)) {
-                        ImGui::Text("%.4f", sample.effort);
-                    } else {
-                        ImGui::TextUnformatted("-");
-                    }
-
-                    ImGui::TableSetColumnIndex(7);
-                    if (sample.has_current && std::isfinite(sample.current)) {
-                        ImGui::Text("%.4f", sample.current);
-                    } else {
-                        ImGui::TextUnformatted("-");
-                    }
-
-                    ImGui::TableSetColumnIndex(8);
-                    if (diag.has_info) {
-                        ImGui::Text("[%.2f, %.2f]", diag.min_angle, diag.max_angle);
-                    } else {
-                        ImGui::TextUnformatted("-");
-                    }
-
-                    ImGui::TableSetColumnIndex(9);
-                    ImGui::TextColored(health_color, "%s", health_text);
-                }
-
-                ImGui::EndTable();
-            }
-
-            ImGui::Separator();
-            ImGui::Text("关节波形");
-
-            std::map<std::string, std::vector<std::string>> group_joint_map;
-            for (const auto& sample : latest_sensor_samples_) {
-                if (only_show_master_arm_groups_ && !IsMasterArmGroup(sample.group)) {
-                    continue;
-                }
-
-                auto& joints = group_joint_map[sample.group];
-                if (std::find(joints.begin(), joints.end(), sample.name) == joints.end()) {
-                    joints.push_back(sample.name);
-                }
-            }
-
-            if (group_joint_map.empty()) {
-                ImGui::TextDisabled("当前没有可用于绘图的关节数据。");
-            } else {
-                if (group_joint_map.find(selected_wave_group_) == group_joint_map.end()) {
-                    selected_wave_group_ = group_joint_map.begin()->first;
-                }
-
-                const auto& selectable_joints = group_joint_map[selected_wave_group_];
-                if (std::find(selectable_joints.begin(), selectable_joints.end(), selected_wave_joint_) ==
-                    selectable_joints.end()) {
-                    selected_wave_joint_ = selectable_joints.empty() ? std::string() : selectable_joints.front();
-                }
-
-                if (selected_wave_metric_ < 0 || selected_wave_metric_ > 3) {
-                    selected_wave_metric_ = 0;
-                }
-
-                ImGui::PushItemWidth(-1.0f);
-                if (ImGui::BeginCombo("波形关节组", selected_wave_group_.c_str())) {
-                    for (const auto& [group_name, joints] : group_joint_map) {
-                        (void)joints;
-                        bool selected = (group_name == selected_wave_group_);
-                        if (ImGui::Selectable(group_name.c_str(), selected)) {
-                            selected_wave_group_ = group_name;
-                        }
-                        if (selected) {
-                            ImGui::SetItemDefaultFocus();
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-
-                const auto& joints_for_selected_group = group_joint_map[selected_wave_group_];
-                if (std::find(joints_for_selected_group.begin(), joints_for_selected_group.end(), selected_wave_joint_) ==
-                    joints_for_selected_group.end()) {
-                    selected_wave_joint_ = joints_for_selected_group.empty() ? std::string() : joints_for_selected_group.front();
-                }
-                const char* selected_joint_preview =
-                    selected_wave_joint_.empty() ? "(none)" : selected_wave_joint_.c_str();
-                if (ImGui::BeginCombo("波形关节", selected_joint_preview)) {
-                    for (const auto& joint_name : joints_for_selected_group) {
-                        bool selected = (joint_name == selected_wave_joint_);
-                        if (ImGui::Selectable(joint_name.c_str(), selected)) {
-                            selected_wave_joint_ = joint_name;
-                        }
-                        if (selected) {
-                            ImGui::SetItemDefaultFocus();
-                        }
-                    }
-                    ImGui::EndCombo();
-                }
-
-                ImGui::Combo("波形指标", &selected_wave_metric_, kWaveMetricLabels, IM_ARRAYSIZE(kWaveMetricLabels));
-                ImGui::PopItemWidth();
-
-                if (selected_wave_joint_.empty()) {
-                    ImGui::TextDisabled("该分组下无可选关节。");
-                } else {
-                    std::string waveform_key =
-                        selected_wave_group_ + "/" + selected_wave_joint_ + "/" + WaveMetricKeySuffix(selected_wave_metric_);
-                    auto it = waveform_history_.find(waveform_key);
-                    if (it == waveform_history_.end() || it->second.empty()) {
-                        ImGui::TextDisabled("正在等待该指标的波形数据...");
-                    } else {
-                        std::vector<float> plot_values(it->second.begin(), it->second.end());
-                        float min_value = *std::min_element(plot_values.begin(), plot_values.end());
-                        float max_value = *std::max_element(plot_values.begin(), plot_values.end());
-                        if (std::abs(max_value - min_value) < 1e-6f) {
-                            min_value -= 1e-3f;
-                            max_value += 1e-3f;
-                        }
-
-                        DrawWaveformWithAxes("##joint_waveform_plot_axes", plot_values, min_value, max_value,
-                                             ImVec2(-FLT_MIN, waveform_plot_height_));
-                        ImGui::Text("当前值：%.4f  最小：%.4f  最大：%.4f  样本数：%d", plot_values.back(), min_value,
-                                    max_value, static_cast<int>(plot_values.size()));
-                    }
-                }
-            }
-
-            ImGui::Separator();
-            ImGui::Text("告警中心");
-            int active_alarm_count = 0;
-            for (const auto& [key, alarm] : alarms_) {
-                (void)key;
-                if (alarm.active) {
-                    active_alarm_count++;
-                }
-            }
-            ImGui::Text("活跃告警：%d / 总告警：%d", active_alarm_count, static_cast<int>(alarms_.size()));
-
-            ImGui::Checkbox("仅显示活跃告警", &show_only_active_alarms_);
-            if (ImGui::Button("确认全部活跃告警")) {
-                for (auto& [key, alarm] : alarms_) {
-                    (void)key;
-                    if (alarm.active) {
-                        alarm.acknowledged = true;
-                    }
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("清理已恢复告警")) {
-                for (auto it = alarms_.begin(); it != alarms_.end();) {
-                    if (!it->second.active) {
-                        bad_frame_streak_.erase(it->first);
-                        it = alarms_.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-            }
-
-            std::vector<std::pair<std::string, AlarmEntry*>> alarm_rows;
-            alarm_rows.reserve(alarms_.size());
-            for (auto& [key, alarm] : alarms_) {
-                alarm_rows.push_back({key, &alarm});
-            }
-            std::sort(alarm_rows.begin(), alarm_rows.end(),
-                      [](const auto& a, const auto& b) {
-                          if (a.second->active != b.second->active) {
-                              return a.second->active > b.second->active;
-                          }
-                          return a.second->last_seen_s > b.second->last_seen_s;
-                      });
-
-            ImGuiTableFlags alarm_table_flags =
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
-            if (ImGui::BeginTable("alarm_table", 7, alarm_table_flags, ImVec2(-FLT_MIN, 180.0f))) {
-                ImGui::TableSetupColumn("状态");
-                ImGui::TableSetupColumn("关节");
-                ImGui::TableSetupColumn("原因");
-                ImGui::TableSetupColumn("次数");
-                ImGui::TableSetupColumn("首次(s)");
-                ImGui::TableSetupColumn("最近(s)");
-                ImGui::TableSetupColumn("确认");
-                ImGui::TableHeadersRow();
-
-                for (const auto& [alarm_key, alarm_ptr] : alarm_rows) {
-                    const AlarmEntry& alarm = *alarm_ptr;
-                    if (show_only_active_alarms_ && !alarm.active) {
-                        continue;
-                    }
-
-                    ImGui::TableNextRow();
-
-                    ImGui::TableSetColumnIndex(0);
-                    if (alarm.active) {
-                        ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "活跃");
-                    } else {
-                        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.65f, 1.0f), "已恢复");
-                    }
-
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::Text("%s/%s", alarm.group.c_str(), alarm.joint.c_str());
-
-                    ImGui::TableSetColumnIndex(2);
-                    const char* reason_text = alarm.reason.c_str();
-                    if (alarm.reason == "OUT_OF_RANGE") {
-                        reason_text = "超限";
-                    } else if (alarm.reason == "INVALID") {
-                        reason_text = "无效数据";
-                    } else if (alarm.reason == "NO_URDF_MATCH") {
-                        reason_text = "无URDF匹配";
-                    }
-                    ImGui::TextUnformatted(reason_text);
-
-                    ImGui::TableSetColumnIndex(3);
-                    ImGui::Text("%d", alarm.trigger_count);
-
-                    ImGui::TableSetColumnIndex(4);
-                    ImGui::Text("%.1f", alarm.first_seen_s);
-
-                    ImGui::TableSetColumnIndex(5);
-                    ImGui::Text("%.1f", alarm.last_seen_s);
-
-                    ImGui::TableSetColumnIndex(6);
-                    if (!alarm.active) {
-                        ImGui::TextUnformatted("-");
-                    } else if (alarm.acknowledged) {
-                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "已确认");
-                    } else {
-                        std::string btn_id = "确认##" + alarm_key;
-                        if (ImGui::SmallButton(btn_id.c_str())) {
-                            auto it = alarms_.find(alarm_key);
-                            if (it != alarms_.end()) {
-                                it->second.acknowledged = true;
-                            }
-                        }
-                    }
-                }
-                ImGui::EndTable();
-            }
-
-            ImGui::Separator();
-            ImGui::Text("手动模式（本地调试）");
-            if (use_sensor_to_drive_robot_) {
-                ImGui::TextDisabled("请先关闭“传感器驱动”后再使用本地滑条。");
-            } else {
-                auto joints = scene_.getJointInfos();
-                for (const auto& joint : joints) {
-                    if (!joint.revolute) {
-                        continue;
-                    }
-                    if (fix_base_like_mujoco_ && IsBaseMotionJointName(joint.name)) {
-                        continue;
-                    }
-
-                    float value = joint.position;
-                    if (ImGui::SliderAngle(joint.name.c_str(), &value, glm::degrees(joint.min_angle), glm::degrees(joint.max_angle))) {
-                        scene_.setJointPositionByName(joint.name, value);
-                    }
-                }
-            }
-
-            ImGui::Separator();
-            ImGui::Text("相机操作：");
-            ImGui::Text("左键拖动：旋转（RViz Orbit）");
-            ImGui::Text("中键拖动 或 Shift+左键：平移");
-            ImGui::Text("右键拖动：Dolly 缩放");
-            ImGui::Text("滚轮：缩放");
-
-            ImGui::End();
-        }
+        FrameLayout layout = computeFrameLayout();
+        FrameData frame = collectFrameData(nowSec());
+
+        renderSceneFrame(layout);
+        renderSidebar(layout, frame);
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        glViewport(0, 0, w, h);
+        glViewport(0, 0, layout.window_width, layout.window_height);
         glEnable(GL_DEPTH_TEST);
-
         glfwSwapBuffers(window_);
     }
 

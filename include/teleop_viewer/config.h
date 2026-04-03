@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include <string>
+#include <vector>
 
 namespace omnilink::teleop_viewer {
 
@@ -21,6 +22,19 @@ struct RobotConfig {
 struct SensorConfig {
     std::string topic = "singorix_omnilink/scaled_device_robot_data";
     std::string node_name = "singorix_teleop_gui_sensor_monitor";
+};
+
+struct JoyConfig {
+    std::string topic = "singorix_omnilink/joy";
+};
+
+struct OmnilinkBridgeConfig {
+    bool enable = true;
+    std::string rc_virtual_joy_topic = "omnilink_comm/rc_common_cmd";
+    std::string state_topic = "singorix_omnilink/states";
+    std::vector<std::string> rc_button_names = {"fix_height",      "head_angle_fix",   "chassis_fix",   "left_arm_fix",
+                                                "right_arm_fix",   "left_gripper_fix", "right_gripper_fix"};
+    double command_repeat_interval_sec = 0.3;
 };
 
 struct CameraConfig {
@@ -67,6 +81,8 @@ struct ViewerConfig {
     WindowConfig window;
     RobotConfig robot;
     SensorConfig sensor;
+    JoyConfig joy;
+    OmnilinkBridgeConfig omnilink_bridge;
     CameraConfig camera;
     UiConfig ui;
 

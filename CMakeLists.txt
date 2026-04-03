@@ -125,7 +125,9 @@ add_executable(test_demo src/test_demo.cpp src/launcher_module_ui.cpp src/config
 add_executable(robot_viewer
     src/robot_viewer_copy_2.cpp
     src/teleop_viewer/app.cpp
+    src/teleop_viewer/app_sidebar.cpp
     src/teleop_viewer/config.cpp
+    src/teleop_viewer/msg_publisher.cpp
     src/teleop_viewer/scene.cpp
     src/teleop_viewer/sensor_subscriber.cpp
     deps/glad/glad.c
