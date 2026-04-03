@@ -122,7 +122,14 @@ add_executable(test_gui src/test_gui.cpp)
 add_executable(test_demo src/test_demo.cpp src/launcher_module_ui.cpp src/config_ui.cpp )
 
 # add_executable(robot_viewer src/robot_viewer.cpp deps/glad/glad.c)
-add_executable(robot_viewer src/robot_viewer_copy_2.cpp deps/glad/glad.c)
+add_executable(robot_viewer
+    src/robot_viewer_copy_2.cpp
+    src/teleop_viewer/app.cpp
+    src/teleop_viewer/config.cpp
+    src/teleop_viewer/scene.cpp
+    src/teleop_viewer/sensor_subscriber.cpp
+    deps/glad/glad.c
+)
 
 # 链接库
 target_link_libraries(robot_viewer
@@ -138,6 +145,7 @@ target_link_libraries(robot_viewer
     omnilink_proto::omnilink_proto
     ${EMBOSA_LIBRARIES}
     pthread
+    yaml-cpp
 
 )
 
@@ -149,3 +157,4 @@ target_link_libraries(test_demo PRIVATE imgui_glfw_support pthread yaml-cpp)
 
 # 复制着色器文件
 file(COPY shader DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+file(COPY config DESTINATION ${CMAKE_CURRENT_BINARY_DIR})

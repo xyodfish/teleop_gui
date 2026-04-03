@@ -1,0 +1,45 @@
+window:
+  width: 1280
+  height: 720
+  title: "遥操作机器人监控界面"
+
+robot:
+  urdf_path: "/home/yuxia/Workspace/SingoriX/OmniLink/singorix_omnilink/config/galbot_description/galbot_one_golf_description/galbot_one_golf.urdf"
+
+sensor:
+  topic: "singorix_omnilink/scaled_device_robot_data"
+  node_name: "singorix_teleop_gui_sensor_monitor"
+
+camera:
+  distance: 3.0
+  yaw: 0.0
+  pitch: 0.0
+  target: [0.0, 0.0, 0.0]
+
+  rotate_speed: 0.005
+  zoom_scale: 0.1
+  dolly_scale: 0.02
+  pan_scale: 0.0015
+  min_distance: 0.2
+  max_distance: 20.0
+
+ui:
+  only_show_master_arm_groups: true
+  fix_base_like_mujoco: true
+  sidebar_collapsed_default: false
+
+  side_panel_width: 560
+  collapsed_sidebar_width: 34
+  sidebar_width_drag_speed: 0.2
+
+  stale_timeout_seconds: 0.5
+  out_of_range_margin: 0.01
+  waveform_history_size: 600
+  waveform_plot_height: 180.0
+  alarm_trigger_frames: 5
+  alarm_show_only_active_default: true
+  baseline_warn_delta_deg: 15.0
+  record_output_dir: "logs"
+  auto_start_recording: false
+  cjk_font_path: ""
+  cjk_font_size: 18.0
