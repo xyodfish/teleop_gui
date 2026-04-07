@@ -418,6 +418,7 @@ RobotViewerApp::RobotViewerApp(ViewerConfig config) : config_(std::move(config))
     alarm_trigger_frames_    = std::max(1, config_.ui.alarm_trigger_frames);
     record_output_dir_       = config_.ui.record_output_dir.empty() ? "logs" : config_.ui.record_output_dir;
     app_start_time_          = std::chrono::steady_clock::now();
+    auto_lock_on_critical_fault_ = config_.omnilink_bridge.auto_lock_on_critical_fault;
 
     for (const auto& name : config_.omnilink_bridge.rc_button_names) {
         rc_virtual_joy_command_[name] = 0;
@@ -564,10 +565,16 @@ bool RobotViewerApp::initScene() {
     if (config_.omnilink_bridge.enable) {
         omnilink_state_ready_ =
             sensor_ready_ && sensor_subscriber_.startOmnilinkStates(config_.omnilink_bridge.state_topic);
+        wbc_ready_ = !config_.omnilink_bridge.enable_wbc_monitor ||
+                     (sensor_ready_ && sensor_subscriber_.startWbcInfo(config_.omnilink_bridge.wbc_info_topic));
+        robot_error_ready_ = !config_.omnilink_bridge.enable_error_monitor ||
+                             (sensor_ready_ && sensor_subscriber_.startRobotErrors(config_.omnilink_bridge.error_topic));
         rc_virtual_joy_ready_ =
             sensor_ready_ && sensor_subscriber_.startRcVirtualJoyPublisher(config_.omnilink_bridge.rc_virtual_joy_topic);
     } else {
         omnilink_state_ready_ = false;
+        wbc_ready_ = false;
+        robot_error_ready_ = false;
         rc_virtual_joy_ready_ = false;
     }
 
@@ -890,12 +897,40 @@ RobotViewerApp::FrameData RobotViewerApp::collectFrameData(double now_sec) {
     frame.state_msg_count = sensor_subscriber_.stateMessageCount();
     frame.state_data_age = sensor_subscriber_.stateMessageAgeSec();
     frame.state_data_fresh = sensor_subscriber_.stateHasRecentData(config_.ui.stale_timeout_seconds);
+    frame.wbc_msg_count = sensor_subscriber_.wbcMessageCount();
+    frame.wbc_data_age = sensor_subscriber_.wbcMessageAgeSec();
+    frame.wbc_data_fresh = sensor_subscriber_.wbcHasRecentData(config_.ui.stale_timeout_seconds);
+    frame.error_msg_count = sensor_subscriber_.errorMessageCount();
+    frame.error_data_age = sensor_subscriber_.errorMessageAgeSec();
+    frame.error_data_fresh = sensor_subscriber_.errorHasRecentData(config_.ui.stale_timeout_seconds);
 
     latest_sensor_samples_ = sensor_subscriber_.latestSamples();
     latest_joy_buttons_ = sensor_subscriber_.latestJoyButtons();
     latest_joy_axes_ = sensor_subscriber_.latestJoyAxes();
     latest_state_buttons_ = sensor_subscriber_.latestStateButtons();
     latest_state_axes_ = sensor_subscriber_.latestStateAxes();
+    latest_wbc_group_errors_ = sensor_subscriber_.latestWbcGroupErrors();
+    latest_wbc_joint_name_count_ = sensor_subscriber_.latestWbcJointNameCount();
+    latest_wbc_state_pos_count_ = sensor_subscriber_.latestWbcStatePosCount();
+    latest_robot_errors_ = sensor_subscriber_.latestRobotErrors();
+    frame.error_active_count = static_cast<int>(latest_robot_errors_.size());
+
+    for (const auto& button : latest_joy_buttons_) {
+        auto it = prev_joy_button_status_.find(button.name);
+        if (it == prev_joy_button_status_.end() || it->second != button.status) {
+            JoyButtonLogEntry entry;
+            entry.time_s = now_sec;
+            entry.hand = IsLeftHandleKey(button.name) ? "左" : (IsRightHandleKey(button.name) ? "右" : "未知");
+            entry.name = button.name;
+            entry.status = button.status;
+            joy_button_logs_.push_front(std::move(entry));
+            while (joy_button_logs_.size() > joy_button_log_limit_) {
+                joy_button_logs_.pop_back();
+            }
+            prev_joy_button_status_[button.name] = button.status;
+        }
+    }
+
     updateInputRate(frame.msg_count, now_sec);
 
     frame.diag_map.reserve(latest_sensor_samples_.size());

@@ -17,6 +17,13 @@ omnilink_bridge:
   enable: true
   rc_virtual_joy_topic: "omnilink_comm/rc_common_cmd"
   state_topic: "singorix_omnilink/states"
+  wbc_info_topic: "singorix/wbcs/wbc_info"
+  error_topic: "singorix/wbcs/error"
+  enable_wbc_monitor: true
+  enable_error_monitor: true
+  auto_lock_on_critical_fault: false
+  wbc_norm_warn: 0.2
+  wbc_norm_danger: 0.5
   rc_button_names:
     [
       "fix_height",

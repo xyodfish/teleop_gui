@@ -77,6 +77,41 @@ namespace omnilink::teleop_viewer {
         return true;
     }
 
+    bool SensorSubscriber::startWbcInfo(const std::string& topic) {
+        if (!running_ || !node_) {
+            std::cerr << "startWbcInfo failed: sensor subscriber is not initialized." << std::endl;
+            return false;
+        }
+
+        wbc_topic_  = topic;
+        wbc_reader_ = node_->CreateReader<galbot::singorix_proto::WBCInfo>(
+            wbc_topic_, [this](const std::shared_ptr<galbot::singorix_proto::WBCInfo>& msg, const void*) { onWbcInfoMessage(msg); });
+
+        if (!wbc_reader_) {
+            std::cerr << "CreateReader for wbc info topic [" << wbc_topic_ << "] failed." << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    bool SensorSubscriber::startRobotErrors(const std::string& topic) {
+        if (!running_ || !node_) {
+            std::cerr << "startRobotErrors failed: sensor subscriber is not initialized." << std::endl;
+            return false;
+        }
+
+        error_topic_  = topic;
+        error_reader_ = node_->CreateReader<galbot::singorix_proto::SingoriXError>(
+            error_topic_,
+            [this](const std::shared_ptr<galbot::singorix_proto::SingoriXError>& msg, const void*) { onErrorMessage(msg); });
+
+        if (!error_reader_) {
+            std::cerr << "CreateReader for robot error topic [" << error_topic_ << "] failed." << std::endl;
+            return false;
+        }
+        return true;
+    }
+
     bool SensorSubscriber::startRcVirtualJoyPublisher(const std::string& topic) {
         if (!running_ || !node_) {
             std::cerr << "startRcVirtualJoyPublisher failed: sensor subscriber is not initialized." << std::endl;
@@ -100,6 +135,8 @@ namespace omnilink::teleop_viewer {
 
     void SensorSubscriber::stop() {
         msg_publisher_.reset();
+        error_reader_.reset();
+        wbc_reader_.reset();
         state_reader_.reset();
         joy_reader_.reset();
         reader_.reset();
@@ -136,6 +173,26 @@ namespace omnilink::teleop_viewer {
     std::vector<JoyAxisSample> SensorSubscriber::latestStateAxes() const {
         std::lock_guard<std::mutex> lock(data_mtx_);
         return latest_state_axes_;
+    }
+
+    std::vector<WbcGroupErrorSample> SensorSubscriber::latestWbcGroupErrors() const {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        return latest_wbc_group_errors_;
+    }
+
+    std::vector<RobotErrorSample> SensorSubscriber::latestRobotErrors() const {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        return latest_robot_errors_;
+    }
+
+    int SensorSubscriber::latestWbcJointNameCount() const {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        return latest_wbc_joint_name_count_;
+    }
+
+    int SensorSubscriber::latestWbcStatePosCount() const {
+        std::lock_guard<std::mutex> lock(data_mtx_);
+        return latest_wbc_state_pos_count_;
     }
 
     uint64_t SensorSubscriber::messageCount() const { return message_count_.load(std::memory_order_acquire); }
@@ -193,6 +250,44 @@ namespace omnilink::teleop_viewer {
             return false;
         }
         double age = stateMessageAgeSec();
+        return age >= 0.0 && age <= timeout_sec;
+    }
+
+    uint64_t SensorSubscriber::wbcMessageCount() const { return wbc_message_count_.load(std::memory_order_acquire); }
+
+    double SensorSubscriber::wbcMessageAgeSec() const {
+        long long ts_ns = wbc_last_msg_ns_.load(std::memory_order_acquire);
+        if (ts_ns <= 0) {
+            return -1.0;
+        }
+        long long now_ns = nowSteadyNs();
+        return static_cast<double>(now_ns - ts_ns) / 1e9;
+    }
+
+    bool SensorSubscriber::wbcHasRecentData(double timeout_sec) const {
+        if (wbcMessageCount() == 0) {
+            return false;
+        }
+        double age = wbcMessageAgeSec();
+        return age >= 0.0 && age <= timeout_sec;
+    }
+
+    uint64_t SensorSubscriber::errorMessageCount() const { return error_message_count_.load(std::memory_order_acquire); }
+
+    double SensorSubscriber::errorMessageAgeSec() const {
+        long long ts_ns = error_last_msg_ns_.load(std::memory_order_acquire);
+        if (ts_ns <= 0) {
+            return -1.0;
+        }
+        long long now_ns = nowSteadyNs();
+        return static_cast<double>(now_ns - ts_ns) / 1e9;
+    }
+
+    bool SensorSubscriber::errorHasRecentData(double timeout_sec) const {
+        if (errorMessageCount() == 0) {
+            return false;
+        }
+        double age = errorMessageAgeSec();
         return age >= 0.0 && age <= timeout_sec;
     }
 
@@ -321,6 +416,65 @@ namespace omnilink::teleop_viewer {
 
         state_message_count_.fetch_add(1, std::memory_order_acq_rel);
         state_last_msg_ns_.store(nowSteadyNs(), std::memory_order_release);
+    }
+
+    void SensorSubscriber::onWbcInfoMessage(const std::shared_ptr<galbot::singorix_proto::WBCInfo>& msg) {
+        if (!msg) {
+            return;
+        }
+
+        std::vector<WbcGroupErrorSample> groups;
+        groups.reserve(static_cast<size_t>(msg->group_info_map_size()));
+        for (const auto& [group_name, group_info] : msg->group_info_map()) {
+            WbcGroupErrorSample item;
+            item.group = group_name;
+            item.joint_count = group_info.joint_names_size();
+            item.pos_norm = group_info.error_final_pos_norm();
+            item.vel_norm = group_info.error_final_vel_norm();
+            item.eff_norm = group_info.error_final_eff_norm();
+            groups.push_back(std::move(item));
+        }
+
+        int joint_name_count = 0;
+        int state_pos_count = 0;
+        if (msg->has_joint_info()) {
+            joint_name_count = msg->joint_info().names_size();
+            state_pos_count = msg->joint_info().state_pos_size();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(data_mtx_);
+            latest_wbc_group_errors_.swap(groups);
+            latest_wbc_joint_name_count_ = joint_name_count;
+            latest_wbc_state_pos_count_ = state_pos_count;
+        }
+
+        wbc_message_count_.fetch_add(1, std::memory_order_acq_rel);
+        wbc_last_msg_ns_.store(nowSteadyNs(), std::memory_order_release);
+    }
+
+    void SensorSubscriber::onErrorMessage(const std::shared_ptr<galbot::singorix_proto::SingoriXError>& msg) {
+        if (!msg) {
+            return;
+        }
+
+        std::vector<RobotErrorSample> errors;
+        errors.reserve(msg->error_map().size());
+        for (const auto& [component, detail] : msg->error_map()) {
+            RobotErrorSample item;
+            item.component = component;
+            item.code = detail.error_code();
+            item.description = detail.description();
+            errors.push_back(std::move(item));
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(data_mtx_);
+            latest_robot_errors_.swap(errors);
+        }
+
+        error_message_count_.fetch_add(1, std::memory_order_acq_rel);
+        error_last_msg_ns_.store(nowSteadyNs(), std::memory_order_release);
     }
 
 }  // namespace omnilink::teleop_viewer

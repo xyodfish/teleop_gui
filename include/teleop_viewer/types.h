@@ -32,6 +32,20 @@ struct JoyAxisSample {
     bool has_value = false;
 };
 
+struct WbcGroupErrorSample {
+    std::string group;
+    int joint_count = 0;
+    double pos_norm = 0.0;
+    double vel_norm = 0.0;
+    double eff_norm = 0.0;
+};
+
+struct RobotErrorSample {
+    std::string component;
+    int code = 0;
+    std::string description;
+};
+
 inline std::string ToLowerCopy(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;

@@ -56,8 +56,15 @@ ViewerConfig ViewerConfig::LoadFromFile(const std::string& yaml_path, bool* load
         ReadScalar(root["omnilink_bridge"], "enable", cfg.omnilink_bridge.enable);
         ReadScalar(root["omnilink_bridge"], "rc_virtual_joy_topic", cfg.omnilink_bridge.rc_virtual_joy_topic);
         ReadScalar(root["omnilink_bridge"], "state_topic", cfg.omnilink_bridge.state_topic);
+        ReadScalar(root["omnilink_bridge"], "wbc_info_topic", cfg.omnilink_bridge.wbc_info_topic);
+        ReadScalar(root["omnilink_bridge"], "error_topic", cfg.omnilink_bridge.error_topic);
+        ReadScalar(root["omnilink_bridge"], "enable_wbc_monitor", cfg.omnilink_bridge.enable_wbc_monitor);
+        ReadScalar(root["omnilink_bridge"], "enable_error_monitor", cfg.omnilink_bridge.enable_error_monitor);
+        ReadScalar(root["omnilink_bridge"], "auto_lock_on_critical_fault", cfg.omnilink_bridge.auto_lock_on_critical_fault);
         ReadStringList(root["omnilink_bridge"], "rc_button_names", cfg.omnilink_bridge.rc_button_names);
         ReadScalar(root["omnilink_bridge"], "command_repeat_interval_sec", cfg.omnilink_bridge.command_repeat_interval_sec);
+        ReadScalar(root["omnilink_bridge"], "wbc_norm_warn", cfg.omnilink_bridge.wbc_norm_warn);
+        ReadScalar(root["omnilink_bridge"], "wbc_norm_danger", cfg.omnilink_bridge.wbc_norm_danger);
 
         ReadScalar(root["camera"], "distance", cfg.camera.distance);
         ReadScalar(root["camera"], "yaw", cfg.camera.yaw);
