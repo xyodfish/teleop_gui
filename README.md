@@ -1,4 +1,4 @@
-# SingoriX Teleop GUI 🤖✨
+# Teleop GUI 🤖✨
 
 一个面向遥操作主臂的可视化监控与交互工具。基于 ImGui + OpenGL + GLFW，支持机器人 3D 渲染、主臂传感器数据监控、手柄状态显示、WBC/错误监控与基础控制下发。
 
