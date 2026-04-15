@@ -17,7 +17,7 @@ namespace omnilink::teleop_viewer {
         topic_ = topic;
 
         // Some embosa builds do not export EmbosaInit(), but do export EmbosaInitInternal().
-        embosa_inited_ = galbot::embosa::EmbosaInitInternal();
+        embosa_inited_ = galbot::embosa::EmbosaInit();
         if (!embosa_inited_) {
             std::cerr << "EmbosaInit failed, sensor monitor disabled." << std::endl;
             return false;
@@ -102,8 +102,7 @@ namespace omnilink::teleop_viewer {
 
         error_topic_  = topic;
         error_reader_ = node_->CreateReader<galbot::singorix_proto::SingoriXError>(
-            error_topic_,
-            [this](const std::shared_ptr<galbot::singorix_proto::SingoriXError>& msg, const void*) { onErrorMessage(msg); });
+            error_topic_, [this](const std::shared_ptr<galbot::singorix_proto::SingoriXError>& msg, const void*) { onErrorMessage(msg); });
 
         if (!error_reader_) {
             std::cerr << "CreateReader for robot error topic [" << error_topic_ << "] failed." << std::endl;
@@ -118,7 +117,7 @@ namespace omnilink::teleop_viewer {
             return false;
         }
 
-        rc_virtual_joy_topic_  = topic;
+        rc_virtual_joy_topic_ = topic;
         if (!msg_publisher_.initRcVirtualJoyWriter(node_.get(), rc_virtual_joy_topic_)) {
             std::cerr << "CreateWriter for rc virtual joy topic [" << rc_virtual_joy_topic_ << "] failed." << std::endl;
             return false;
@@ -427,26 +426,26 @@ namespace omnilink::teleop_viewer {
         groups.reserve(static_cast<size_t>(msg->group_info_map_size()));
         for (const auto& [group_name, group_info] : msg->group_info_map()) {
             WbcGroupErrorSample item;
-            item.group = group_name;
+            item.group       = group_name;
             item.joint_count = group_info.joint_names_size();
-            item.pos_norm = group_info.error_final_pos_norm();
-            item.vel_norm = group_info.error_final_vel_norm();
-            item.eff_norm = group_info.error_final_eff_norm();
+            item.pos_norm    = group_info.error_final_pos_norm();
+            item.vel_norm    = group_info.error_final_vel_norm();
+            item.eff_norm    = group_info.error_final_eff_norm();
             groups.push_back(std::move(item));
         }
 
         int joint_name_count = 0;
-        int state_pos_count = 0;
+        int state_pos_count  = 0;
         if (msg->has_joint_info()) {
             joint_name_count = msg->joint_info().names_size();
-            state_pos_count = msg->joint_info().state_pos_size();
+            state_pos_count  = msg->joint_info().state_pos_size();
         }
 
         {
             std::lock_guard<std::mutex> lock(data_mtx_);
             latest_wbc_group_errors_.swap(groups);
             latest_wbc_joint_name_count_ = joint_name_count;
-            latest_wbc_state_pos_count_ = state_pos_count;
+            latest_wbc_state_pos_count_  = state_pos_count;
         }
 
         wbc_message_count_.fetch_add(1, std::memory_order_acq_rel);
@@ -462,8 +461,8 @@ namespace omnilink::teleop_viewer {
         errors.reserve(msg->error_map().size());
         for (const auto& [component, detail] : msg->error_map()) {
             RobotErrorSample item;
-            item.component = component;
-            item.code = detail.error_code();
+            item.component   = component;
+            item.code        = detail.error_code();
             item.description = detail.description();
             errors.push_back(std::move(item));
         }
