@@ -1,0 +1,63 @@
+window:
+  width: 1280
+  height: 720
+  title: "遥操作机器人监控界面 - Unitree G1"
+
+robot:
+  urdf_path: "/data/open_src_code/GMR_custom/assets/unitree_g1/g1_custom_collision_29dof.urdf"
+  mujoco_xml_path: "/data/open_src_code/GMR_custom/assets/unitree_g1/g1_mocap_29dof.xml"
+
+sensor:
+  topic: "singorix_omnilink/scaled_device_robot_data"
+  node_name: "singorix_teleop_gui_sensor_monitor"
+
+joy:
+  topic: "singorix_omnilink/joy"
+
+omnilink_bridge:
+  enable: true
+  rc_virtual_joy_topic: "omnilink_comm/rc_common_cmd"
+  state_topic: "singorix_omnilink/states"
+  wbc_info_topic: "singorix/wbcs/wbc_info"
+  error_topic: "singorix/wbcs/error"
+  enable_wbc_monitor: true
+  enable_error_monitor: true
+  auto_lock_on_critical_fault: false
+  wbc_norm_warn: 0.2
+  wbc_norm_danger: 0.5
+  rc_button_names: ["fix_height", "head_angle_fix", "chassis_fix", "left_arm_fix", "right_arm_fix", "left_gripper_fix", "right_gripper_fix"]
+  command_repeat_interval_sec: 0.3
+
+camera:
+  distance: 3.0
+  yaw: 0.0
+  pitch: 0.0
+  target: [0.0, 0.0, 0.0]
+
+  rotate_speed: 0.005
+  zoom_scale: 0.1
+  dolly_scale: 0.02
+  pan_scale: 0.0015
+  min_distance: 0.2
+  max_distance: 20.0
+
+ui:
+  only_show_master_arm_groups: true
+  fix_base_like_mujoco: true
+  sidebar_collapsed_default: false
+
+  side_panel_width: 560
+  collapsed_sidebar_width: 34
+  sidebar_width_drag_speed: 0.2
+
+  stale_timeout_seconds: 0.5
+  out_of_range_margin: 0.01
+  waveform_history_size: 600
+  waveform_plot_height: 180.0
+  alarm_trigger_frames: 5
+  alarm_show_only_active_default: true
+  baseline_warn_delta_deg: 15.0
+  record_output_dir: "logs"
+  auto_start_recording: false
+  cjk_font_path: ""
+  cjk_font_size: 18.0

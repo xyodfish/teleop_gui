@@ -44,6 +44,18 @@ class RobotScene {
         float max_angle = 3.14f;
         bool revolute = false;
     };
+    struct JointAxisInfo {
+        std::string name;
+        glm::vec3 world_origin = glm::vec3(0.0f);
+        glm::vec3 world_axis = glm::vec3(0.0f, 0.0f, 1.0f);
+        bool revolute = false;
+    };
+    struct LinkTfInfo {
+        std::string name;
+        std::string parent_name;
+        glm::vec3 world_position = glm::vec3(0.0f);
+        glm::vec3 world_rpy = glm::vec3(0.0f);
+    };
 
     RobotScene();
     ~RobotScene();
@@ -58,6 +70,8 @@ class RobotScene {
 
     bool getJointInfo(const std::string& joint_name, JointInfo* out) const;
     std::vector<JointInfo> getJointInfos() const;
+    std::vector<JointAxisInfo> getJointAxisInfos(bool revolute_only = true) const;
+    std::vector<LinkTfInfo> getLinkTfInfos() const;
 
     void setFixedBaseMode(bool enabled);
     bool fixedBaseMode() const;

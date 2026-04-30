@@ -49,6 +49,7 @@ ViewerConfig ViewerConfig::LoadFromFile(const std::string& yaml_path, bool* load
         ReadScalar(root["window"], "title", cfg.window.title);
 
         ReadScalar(root["robot"], "urdf_path", cfg.robot.urdf_path);
+        ReadScalar(root["robot"], "mujoco_xml_path", cfg.robot.mujoco_xml_path);
 
         ReadScalar(root["sensor"], "topic", cfg.sensor.topic);
         ReadScalar(root["sensor"], "node_name", cfg.sensor.node_name);

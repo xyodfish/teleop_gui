@@ -17,6 +17,7 @@ struct RobotConfig {
     std::string urdf_path =
         "/home/yuxia/Workspace/SingoriX/OmniLink/singorix_omnilink/config/galbot_description/galbot_one_golf_description/"
         "galbot_one_golf.urdf";
+    std::string mujoco_xml_path = "";
 };
 
 struct SensorConfig {

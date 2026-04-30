@@ -31,6 +31,16 @@ else ( NOT CMAKE_BUILD_TYPE )
     message( STATUS "Build type set to '${CMAKE_BUILD_TYPE}' by user." )
 endif ( NOT CMAKE_BUILD_TYPE )
 
+if (NOT COMMON_LIB_ROOT_PATH)
+    set(COMMON_LIB_ROOT_PATH /opt/galbot/devel/)
+endif ()
+
+# 多平台部署
+if(NOT ARCH_PREFIX)
+        set(ARCH_PREFIX ${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_SYSTEM_NAME}-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION})
+endif()
+
+
 # 设定默认安装路径
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX ${PROJECT_SOURCE_DIR}/../../devel/${ARCH_FREFIX} CACHE PATH "Default installation directory" FORCE)
@@ -113,10 +123,15 @@ add_library(imgui_glfw_support
     deps/imgui/imgui_impl_opengl3.cpp
 )
 
+add_library(imguizmo
+    deps/imguizmo/ImGuizmo.cpp
+)
+
 # 将你的库与必要的依赖项链接：ImGui本身、GLFW、OpenGL
 target_link_libraries(imgui_glfw_support PUBLIC imgui glfw OpenGL::GL)
 # 包含必要的头文件目录
 target_include_directories(imgui_glfw_support PUBLIC deps/imgui)
+target_include_directories(imguizmo PUBLIC deps/imgui deps/imguizmo)
 
 add_executable(test_gui src/test_gui.cpp)
 add_executable(test_demo src/test_demo.cpp src/launcher_module_ui.cpp src/config_ui.cpp )
@@ -130,6 +145,13 @@ add_executable(robot_viewer
     src/teleop_viewer/msg_publisher.cpp
     src/teleop_viewer/scene.cpp
     src/teleop_viewer/sensor_subscriber.cpp
+    deps/glad/glad.c
+)
+
+add_executable(robot_kinematic_viewer
+    src/robot_kinematic_viewer.cpp
+    src/teleop_viewer/config.cpp
+    src/teleop_viewer/scene.cpp
     deps/glad/glad.c
 )
 
@@ -149,6 +171,21 @@ target_link_libraries(robot_viewer
     pthread
     yaml-cpp
 
+)
+
+target_link_libraries(robot_kinematic_viewer
+    imgui_glfw_support
+    imguizmo
+    assimp
+    urdfdom_model
+    urdfdom_world
+    urdfdom_sensor
+    ${trac_ik_LIBRARIES}
+    OpenGL::GL
+    glfw
+    GLEW::GLEW
+    pthread
+    yaml-cpp
 )
 
 

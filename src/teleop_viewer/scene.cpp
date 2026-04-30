@@ -19,6 +19,8 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <set>
+#include <unordered_map>
 #include <utility>
 
 namespace omnilink::teleop_viewer {
@@ -73,15 +75,16 @@ struct Mesh {
         glBindVertexArray(0);
     }
 
-    void draw(GLuint shader) {
+    void draw(GLuint shader, const glm::vec3* override_color = nullptr, bool force_color_only = false) {
         glBindVertexArray(vao);
-        if (!textures.empty()) {
+        const glm::vec3 color = override_color ? *override_color : diffuse_color;
+        glUniform3f(glGetUniformLocation(shader, "diffuseColor"), color.r, color.g, color.b);
+        if (!textures.empty() && !force_color_only) {
             glUniform1i(glGetUniformLocation(shader, "hasTexture"), true);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, textures[0].id);
         } else {
             glUniform1i(glGetUniformLocation(shader, "hasTexture"), false);
-            glUniform3f(glGetUniformLocation(shader, "diffuseColor"), diffuse_color.r, diffuse_color.g, diffuse_color.b);
         }
         glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, 0);
         glBindVertexArray(0);
@@ -206,6 +209,8 @@ struct LinkVisual {
 
     std::string parent_link_name;
     glm::mat4 local_transform = glm::mat4(1.0f);
+    glm::vec3 urdf_color = glm::vec3(0.8f, 0.8f, 0.8f);
+    bool has_urdf_color = false;
 
     Model model;
     bool loaded = false;
@@ -219,12 +224,23 @@ struct JointState {
     bool revolute = false;
 };
 
+struct JointAxisState {
+    std::string name;
+    glm::vec3 axis_local = glm::vec3(0.0f, 0.0f, 1.0f);
+    glm::vec3 world_origin = glm::vec3(0.0f);
+    glm::vec3 world_axis = glm::vec3(0.0f, 0.0f, 1.0f);
+    bool revolute = false;
+};
+
 }  // namespace
 
 struct RobotScene::Impl {
     std::map<std::string, LinkVisual> visuals;
     std::map<std::string, glm::mat4> transforms;
+    std::map<std::string, std::string> link_parent;
     std::vector<JointState> joint_states;
+    std::vector<JointAxisState> joint_axis_states;
+    std::unordered_map<std::string, size_t> joint_axis_index;
 
     std::string package_path;
     std::string urdf_file_path;
@@ -233,6 +249,24 @@ struct RobotScene::Impl {
     bool fixed_base_mode = true;
 
     std::string resolvePath(const std::string& path) const {
+        if (path.empty()) {
+            return path;
+        }
+
+        // Absolute path: use as-is.
+        if (path.front() == '/') {
+            return path;
+        }
+
+        // Relative path from URDF directory.
+        if (!package_path.empty()) {
+            std::string candidate = package_path + "/" + path;
+            std::ifstream f(candidate);
+            if (f.good()) {
+                return candidate;
+            }
+        }
+
         if (path.rfind("package://", 0) == 0) {
             size_t package_end = path.find('/', 10);
             if (package_end != std::string::npos) {
@@ -277,6 +311,8 @@ struct RobotScene::Impl {
 
     void initJointStates(urdf::ModelInterfaceSharedPtr model) {
         joint_states.clear();
+        joint_axis_states.clear();
+        joint_axis_index.clear();
         std::function<void(urdf::LinkConstSharedPtr)> collectJoints = [&](urdf::LinkConstSharedPtr link) {
             for (auto& child_link : link->child_links) {
                 auto joint = child_link->parent_joint;
@@ -288,6 +324,17 @@ struct RobotScene::Impl {
                     js.max_angle = joint->limits ? static_cast<float>(joint->limits->upper) : 3.14f;
                     js.revolute  = (joint->type == urdf::Joint::REVOLUTE || joint->type == urdf::Joint::CONTINUOUS);
                     joint_states.push_back(js);
+
+                    JointAxisState axis_state;
+                    axis_state.name = joint->name;
+                    glm::vec3 axis(joint->axis.x, joint->axis.y, joint->axis.z);
+                    if (glm::length(axis) < 1e-6f) {
+                        axis = glm::vec3(0.0f, 0.0f, 1.0f);
+                    }
+                    axis_state.axis_local = glm::normalize(axis);
+                    axis_state.revolute = js.revolute;
+                    joint_axis_index[axis_state.name] = joint_axis_states.size();
+                    joint_axis_states.push_back(axis_state);
                 }
                 collectJoints(child_link);
             }
@@ -325,10 +372,12 @@ bool RobotScene::loadURDF(const std::string& urdf_path) {
 
     impl_->visuals.clear();
     impl_->transforms.clear();
+    impl_->link_parent.clear();
 
-    std::function<void(urdf::LinkConstSharedPtr, const glm::mat4&)> traverse = [&](urdf::LinkConstSharedPtr link,
-                                                                                     const glm::mat4& parent_transform) {
+    std::function<void(urdf::LinkConstSharedPtr, const glm::mat4&, const std::string&)> traverse =
+        [&](urdf::LinkConstSharedPtr link, const glm::mat4& parent_transform, const std::string& parent_name) {
         impl_->transforms[link->name] = parent_transform;
+        impl_->link_parent[link->name] = parent_name;
 
         for (size_t i = 0; i < link->visual_array.size(); ++i) {
             auto visual = link->visual_array[i];
@@ -359,6 +408,12 @@ bool RobotScene::loadURDF(const std::string& urdf_path) {
 
             lv.local_transform  = localT;
             lv.parent_link_name = link->name;
+            if (visual->material) {
+                lv.urdf_color = glm::vec3(static_cast<float>(visual->material->color.r),
+                                          static_cast<float>(visual->material->color.g),
+                                          static_cast<float>(visual->material->color.b));
+                lv.has_urdf_color = true;
+            }
 
             if (!lv.mesh_file.empty()) {
                 lv.model.loadAssimp(lv.mesh_file);
@@ -415,11 +470,11 @@ bool RobotScene::loadURDF(const std::string& urdf_path) {
                 }
             }
 
-            traverse(child_link, joint_transform);
+            traverse(child_link, joint_transform, link->name);
         }
     };
 
-    traverse(model->getRoot(), glm::mat4(1.0f));
+    traverse(model->getRoot(), glm::mat4(1.0f), "");
     return true;
 }
 
@@ -451,6 +506,19 @@ void RobotScene::updateTransforms() {
                                      glm::mat4_cast(glm::quat(glm::vec3((float)roll, (float)pitch, (float)yaw)));
 
             glm::mat4 joint_motion(1.0f);
+
+            glm::mat4 joint_frame_world = parent_transform * joint_origin;
+            auto axis_it = impl_->joint_axis_index.find(joint->name);
+            if (axis_it != impl_->joint_axis_index.end()) {
+                JointAxisState& axis_state = impl_->joint_axis_states[axis_it->second];
+                axis_state.world_origin = glm::vec3(joint_frame_world[3]);
+                glm::vec3 axis_world = glm::mat3(joint_frame_world) * axis_state.axis_local;
+                if (glm::length(axis_world) < 1e-6f) {
+                    axis_world = glm::vec3(0.0f, 0.0f, 1.0f);
+                }
+                axis_state.world_axis = glm::normalize(axis_world);
+            }
+
             for (const auto& js : impl_->joint_states) {
                 if (js.name != joint->name) {
                     continue;
@@ -502,7 +570,11 @@ void RobotScene::draw(GLuint shader) {
 
         glUniformMatrix4fv(glGetUniformLocation(shader, "model"), 1, GL_FALSE, glm::value_ptr(model_mat));
         for (auto& mesh : lv.model.meshes) {
-            mesh.draw(shader);
+            if (lv.has_urdf_color) {
+                mesh.draw(shader, &lv.urdf_color, true);
+            } else {
+                mesh.draw(shader);
+            }
         }
     }
 }
@@ -563,6 +635,47 @@ std::vector<RobotScene::JointInfo> RobotScene::getJointInfos() const {
         info.min_angle = js.min_angle;
         info.max_angle = js.max_angle;
         info.revolute  = js.revolute;
+        infos.push_back(std::move(info));
+    }
+
+    return infos;
+}
+
+std::vector<RobotScene::JointAxisInfo> RobotScene::getJointAxisInfos(bool revolute_only) const {
+    std::vector<JointAxisInfo> infos;
+    infos.reserve(impl_->joint_axis_states.size());
+
+    for (const auto& axis_state : impl_->joint_axis_states) {
+        if (revolute_only && !axis_state.revolute) {
+            continue;
+        }
+        JointAxisInfo info;
+        info.name = axis_state.name;
+        info.world_origin = axis_state.world_origin;
+        info.world_axis = axis_state.world_axis;
+        info.revolute = axis_state.revolute;
+        infos.push_back(std::move(info));
+    }
+
+    return infos;
+}
+
+std::vector<RobotScene::LinkTfInfo> RobotScene::getLinkTfInfos() const {
+    std::vector<LinkTfInfo> infos;
+    infos.reserve(impl_->transforms.size());
+
+    for (const auto& [link_name, tf] : impl_->transforms) {
+        LinkTfInfo info;
+        info.name = link_name;
+        auto parent_it = impl_->link_parent.find(link_name);
+        if (parent_it != impl_->link_parent.end()) {
+            info.parent_name = parent_it->second;
+        }
+        info.world_position = glm::vec3(tf[3]);
+
+        glm::quat q = glm::quat_cast(tf);
+        glm::vec3 euler = glm::eulerAngles(q);
+        info.world_rpy = euler;
         infos.push_back(std::move(info));
     }
 
