@@ -388,7 +388,8 @@ namespace omnilink::teleop_viewer {
         scene->updateTransforms();
     }
 
-    flex_ik::Vector IkSolver::limitFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode) const {
+    flex_ik::Vector IkSolver::limitFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode,
+                                                bool positionOnlyMode) const {
         flex_ik::Vector qOut = qCurrent;
         if (qCurrent.size() != qSolved.size()) {
             return qOut;
@@ -397,8 +398,9 @@ namespace omnilink::teleop_viewer {
             return qOut;
         }
 
-        const auto& model     = fullBodySolverPose_->model();
-        const double maxDelta = fastMode ? 0.06 : 0.14;
+        const auto& model = fullBodySolverPose_->model();
+        const double maxDelta =
+            fastMode ? (positionOnlyMode ? 0.25 : 0.18) : (positionOnlyMode ? 1.2 : 0.65);
         for (const auto& kv : fullBodyJointQIndex_) {
             const int idxQ = kv.second;
             if (idxQ < 0 || idxQ >= qSolved.size() || idxQ >= qCurrent.size()) {
@@ -470,6 +472,25 @@ namespace omnilink::teleop_viewer {
         bool success                   = false;
         bool usedFallback              = false;
         const flex_ik::Vector qCurrent = buildFullBodyQFromScene(*scene);
+        auto applyCandidate = [&](const flex_ik::Vector& solution, bool solverSuccess, const std::string& solverName) {
+            applyFullBodyQToScene(scene, limitFullBodyStep(qCurrent, solution, fastMode, positionOnlyMode));
+            if (!solverSuccess && !fastMode && !positionOnlyMode && activeChainIndex >= 0 && activeChainIndex < chainCount()) {
+                glm::vec3 tipPos(0.0f);
+                glm::vec3 tipRpy(0.0f);
+                if (fetchTipWorldPose(*scene, activeChainIndex, &tipPos, &tipRpy)) {
+                    const glm::vec3 targetPos = glm::vec3(targetWorldByChain[static_cast<size_t>(activeChainIndex)][3]);
+                    const float activeErrMm   = glm::length(tipPos - targetPos) * 1000.0f;
+                    if (activeErrMm > 120.0f) {
+                        applyFullBodyQToScene(scene, qCurrent);
+                        if (statusText) {
+                            *statusText = "IK失败：" + solverName + "姿态求解未收敛且位置偏差过大，保持当前姿态";
+                        }
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
 
         if (fullBodyBackend_ == "wbc_chain_ik") {
             if (!fullBodyWbcReady_ || fullBodyWbcSolverPose_ == nullptr || fullBodyWbcSolverPosOnly_ == nullptr) {
@@ -479,8 +500,9 @@ namespace omnilink::teleop_viewer {
                 return false;
             }
             Wbc::robot::ChainIkTrait* wbcSolver = positionOnlyMode ? fullBodyWbcSolverPosOnly_.get() : fullBodyWbcSolverPose_.get();
-            wbcSolver->setMaxIters(fastMode ? std::max(12, iterations * 6) : std::max(50, iterations * 25));
-            wbcSolver->setTolerance(fastMode ? 3e-4 : 1e-4);
+            wbcSolver->setMaxIters(fastMode ? std::max(positionOnlyMode ? 12 : 60, iterations * (positionOnlyMode ? 6 : 24))
+                                             : std::max(50, iterations * 25));
+            wbcSolver->setTolerance(fastMode ? (positionOnlyMode ? 3e-4 : 8e-4) : 1e-4);
 
             for (int i = 0; i < chainCount(); ++i) {
                 if (!chains_[i].status.ready) {
@@ -489,7 +511,9 @@ namespace omnilink::teleop_viewer {
                 try {
                     wbcSolver->setTaskReference(chains_[i].status.config.tip_link,
                                                 glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
-                    const double taskWeight = (i == activeChainIndex) ? (fastMode ? 2.0 : 2.6) : 1.0;
+                    const double taskWeight =
+                        (i == activeChainIndex) ? (fastMode ? (positionOnlyMode ? 8.0 : 12.0) : (positionOnlyMode ? 12.0 : 16.0))
+                                                : (positionOnlyMode ? 0.02 : 0.03);
                     wbcSolver->setTaskWeight(chains_[i].status.config.tip_link, taskWeight);
                 } catch (const std::exception& ex) {
                     if (statusText) {
@@ -500,7 +524,7 @@ namespace omnilink::teleop_viewer {
             }
 
             Wbc::robot::IkResult wbcResult = wbcSolver->solveIK(qCurrent, false);
-            if (!wbcResult.success && !fastMode) {
+            if (!wbcResult.success && !fastMode && positionOnlyMode) {
                 Wbc::robot::ChainIkTrait* fallbackSolver = fullBodyWbcSolverPosOnly_.get();
                 fallbackSolver->setMaxIters(std::max(50, iterations * 25));
                 fallbackSolver->setTolerance(2e-4);
@@ -510,7 +534,7 @@ namespace omnilink::teleop_viewer {
                     }
                     fallbackSolver->setTaskReference(chains_[i].status.config.tip_link,
                                                      glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
-                    const double taskWeight = (i == activeChainIndex) ? 2.0 : 1.0;
+                    const double taskWeight = (i == activeChainIndex) ? 12.0 : 0.02;
                     fallbackSolver->setTaskWeight(chains_[i].status.config.tip_link, taskWeight);
                 }
                 wbcResult    = fallbackSolver->solveIK(qCurrent, false);
@@ -523,8 +547,9 @@ namespace omnilink::teleop_viewer {
                 }
                 return false;
             }
-
-            applyFullBodyQToScene(scene, limitFullBodyStep(qCurrent, wbcResult.solution, fastMode));
+            if (!applyCandidate(wbcResult.solution, wbcResult.success, "wbc_chain_ik")) {
+                return false;
+            }
             success = wbcResult.success;
         } else {
             if (!fullBodyFlexReady_ || fullBodySolverPose_ == nullptr || fullBodySolverPosOnly_ == nullptr) {
@@ -547,6 +572,10 @@ namespace omnilink::teleop_viewer {
                 }
                 try {
                     solver->updateTaskTarget(chains_[i].status.config.tip_link, glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
+                    const double taskWeight =
+                        (i == activeChainIndex) ? (fastMode ? (positionOnlyMode ? 8.0 : 12.0) : (positionOnlyMode ? 12.0 : 16.0))
+                                                : (positionOnlyMode ? 0.02 : 0.03);
+                    solver->setTaskWeight(chains_[i].status.config.tip_link, taskWeight);
                 } catch (const std::exception& ex) {
                     if (statusText) {
                         *statusText = std::string("IK失败：flex_ik更新目标失败: ") + ex.what();
@@ -557,7 +586,7 @@ namespace omnilink::teleop_viewer {
 
             flex_ik::Vector q0               = qCurrent;
             flex_ik::FlexIk::IkResult result = solver->solve(q0);
-            if (!result.success && !fastMode) {
+            if (!result.success && !fastMode && positionOnlyMode) {
                 auto fallbackParams             = fullBodySolverPosOnly_->iterativeParams();
                 fallbackParams.max_iterations   = std::max(20, iterations * 15);
                 fallbackParams.error_tolerance  = 2e-3;
@@ -570,6 +599,8 @@ namespace omnilink::teleop_viewer {
                     }
                     fullBodySolverPosOnly_->updateTaskTarget(chains_[i].status.config.tip_link,
                                                              glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
+                    const double taskWeight = (i == activeChainIndex) ? 12.0 : 0.02;
+                    fullBodySolverPosOnly_->setTaskWeight(chains_[i].status.config.tip_link, taskWeight);
                 }
                 result       = fullBodySolverPosOnly_->solve(q0);
                 usedFallback = true;
@@ -581,7 +612,9 @@ namespace omnilink::teleop_viewer {
                 }
                 return false;
             }
-            applyFullBodyQToScene(scene, limitFullBodyStep(qCurrent, result.solution, fastMode));
+            if (!applyCandidate(result.solution, result.success, "flex_ik")) {
+                return false;
+            }
             success = result.success;
         }
 

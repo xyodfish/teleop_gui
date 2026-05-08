@@ -35,8 +35,11 @@ class RvizIkMarkerNode:
         self.markerName_ = rospy.get_param("~marker_name", "ik_target")
         self.publishTopic_ = rospy.get_param("~publish_topic", "/teleop_gui/ik_target_pose")
         self.publishRate_ = float(rospy.get_param("~publish_rate_hz", 30.0))
+        self.feedbackPublishRate_ = float(rospy.get_param("~feedback_publish_rate_hz", self.publishRate_))
         self.markerScale_ = float(rospy.get_param("~marker_scale", 0.30))
-        self.alwaysPublish_ = bool(rospy.get_param("~always_publish", True))
+        self.alwaysPublish_ = bool(rospy.get_param("~always_publish", False))
+        self.latch_ = bool(rospy.get_param("~latch", True))
+        self.positionOnlyHint_ = bool(rospy.get_param("~position_only_hint", True))
 
         initX = float(rospy.get_param("~init_x", 0.45))
         initY = float(rospy.get_param("~init_y", 0.0))
@@ -45,9 +48,10 @@ class RvizIkMarkerNode:
         initPitch = math.radians(float(rospy.get_param("~init_pitch_deg", 0.0)))
         initYaw = math.radians(float(rospy.get_param("~init_yaw_deg", 0.0)))
 
-        self.pub_ = rospy.Publisher(self.publishTopic_, PoseStamped, queue_size=5)
+        self.pub_ = rospy.Publisher(self.publishTopic_, PoseStamped, queue_size=5, latch=self.latch_)
         self.server_ = InteractiveMarkerServer(self.serverNs_)
         self.poseLock_ = threading.Lock()
+        self.lastFeedbackPublishSec_ = 0.0
         self.latestPose_ = Pose()
         self.latestPose_.position.x = initX
         self.latestPose_.position.y = initY
@@ -63,6 +67,7 @@ class RvizIkMarkerNode:
 
         rospy.loginfo("Interactive marker server started: ns=%s frame=%s", self.serverNs_, self.frameId_)
         rospy.loginfo("Publishing IK target pose to: %s", self.publishTopic_)
+        rospy.loginfo("Feedback publish rate: %.1f Hz, always_publish=%s", self.feedbackPublishRate_, self.alwaysPublish_)
 
     def makeAxisControl_(self, name: str, x: float, y: float, z: float, mode: int) -> InteractiveMarkerControl:
         control = InteractiveMarkerControl()
@@ -78,7 +83,7 @@ class RvizIkMarkerNode:
         marker = InteractiveMarker()
         marker.header.frame_id = self.frameId_
         marker.name = self.markerName_
-        marker.description = "IK Target (RViz Interactive Marker)"
+        marker.description = "WBC Chain IK Target (position priority)" if self.positionOnlyHint_ else "WBC Chain IK Target (pose)"
         marker.scale = self.markerScale_
         marker.pose = self.latestPose_
 
@@ -120,6 +125,30 @@ class RvizIkMarkerNode:
         msg.pose = pose
         self.pub_.publish(msg)
 
+    def copyPose_(self, pose: Pose) -> Pose:
+        poseCopy = Pose()
+        poseCopy.position.x = pose.position.x
+        poseCopy.position.y = pose.position.y
+        poseCopy.position.z = pose.position.z
+        poseCopy.orientation.x = pose.orientation.x
+        poseCopy.orientation.y = pose.orientation.y
+        poseCopy.orientation.z = pose.orientation.z
+        poseCopy.orientation.w = pose.orientation.w
+        norm = math.sqrt(
+            poseCopy.orientation.x * poseCopy.orientation.x
+            + poseCopy.orientation.y * poseCopy.orientation.y
+            + poseCopy.orientation.z * poseCopy.orientation.z
+            + poseCopy.orientation.w * poseCopy.orientation.w
+        )
+        if norm > 1e-9:
+            poseCopy.orientation.x /= norm
+            poseCopy.orientation.y /= norm
+            poseCopy.orientation.z /= norm
+            poseCopy.orientation.w /= norm
+        else:
+            poseCopy.orientation.w = 1.0
+        return poseCopy
+
     def processFeedback_(self, feedback: InteractiveMarkerFeedback) -> None:
         event = feedback.event_type
         if event not in (
@@ -129,16 +158,16 @@ class RvizIkMarkerNode:
         ):
             return
 
+        nowSec = rospy.Time.now().to_sec()
+        if event == InteractiveMarkerFeedback.POSE_UPDATE and self.feedbackPublishRate_ > 0.0:
+            minPeriod = 1.0 / self.feedbackPublishRate_
+            if nowSec - self.lastFeedbackPublishSec_ < minPeriod:
+                return
+            self.lastFeedbackPublishSec_ = nowSec
+
         with self.poseLock_:
             self.latestPose_ = feedback.pose
-            poseCopy = Pose()
-            poseCopy.position.x = self.latestPose_.position.x
-            poseCopy.position.y = self.latestPose_.position.y
-            poseCopy.position.z = self.latestPose_.position.z
-            poseCopy.orientation.x = self.latestPose_.orientation.x
-            poseCopy.orientation.y = self.latestPose_.orientation.y
-            poseCopy.orientation.z = self.latestPose_.orientation.z
-            poseCopy.orientation.w = self.latestPose_.orientation.w
+            poseCopy = self.copyPose_(self.latestPose_)
 
         self.publishPose_(poseCopy, feedback.header.stamp if feedback.header.stamp != rospy.Time() else rospy.Time.now())
 
@@ -146,14 +175,7 @@ class RvizIkMarkerNode:
         if not self.alwaysPublish_:
             return
         with self.poseLock_:
-            pose = Pose()
-            pose.position.x = self.latestPose_.position.x
-            pose.position.y = self.latestPose_.position.y
-            pose.position.z = self.latestPose_.position.z
-            pose.orientation.x = self.latestPose_.orientation.x
-            pose.orientation.y = self.latestPose_.orientation.y
-            pose.orientation.z = self.latestPose_.orientation.z
-            pose.orientation.w = self.latestPose_.orientation.w
+            pose = self.copyPose_(self.latestPose_)
         self.publishPose_(pose, rospy.Time.now())
 
 

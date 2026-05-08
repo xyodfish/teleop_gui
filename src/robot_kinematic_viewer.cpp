@@ -234,6 +234,7 @@ void main() {
         bool gizmo_was_using              = false;
         bool gizmo_pose_dirty             = false;
         bool gizmo_drag_interacted        = false;
+        bool gizmo_drag_position_only     = true;
         bool gizmo_was_over               = false;
         bool gizmo_world_mode             = true;
         bool realtime_ik_during_drag      = true;
@@ -249,6 +250,7 @@ void main() {
         bool use_external_target          = true;
         bool external_target_received     = false;
         bool external_target_dirty        = false;
+        bool external_target_position_only = true;
         std::string external_target_topic = "/teleop_gui/ik_target_pose";
         std::string external_target_expected_frame;
         std::string external_target_last_frame;
@@ -469,6 +471,20 @@ int main(int argc, char** argv) {
     ui_state.lock_base = cfg.ui.fix_base_like_mujoco;
     scene.setFixedBaseMode(ui_state.lock_base);
 
+    ros::NodeHandle ros_nh_private("~");
+    std::string ikModeParam;
+    std::string fullBodyBackendParam;
+    int fullBodyIterationsParam = cfg.ik.full_body_iterations;
+    if (ros_nh_private.getParam("ik_mode", ikModeParam)) {
+        cfg.ik.mode = ikModeParam;
+    }
+    if (ros_nh_private.getParam("ik_full_body_backend", fullBodyBackendParam)) {
+        cfg.ik.full_body_backend = fullBodyBackendParam;
+    }
+    if (ros_nh_private.getParam("ik_full_body_iterations", fullBodyIterationsParam)) {
+        cfg.ik.full_body_iterations = std::max(1, fullBodyIterationsParam);
+    }
+
     IkState ik_state;
     DebugPlaybackState playback_state;
     {
@@ -491,14 +507,19 @@ int main(int argc, char** argv) {
         for (int i = 0; i < ik_state.solver.chainCount(); ++i) {
             ik_state.chains.push_back(ik_state.solver.chainStatus(i));
         }
+        ros_nh_private.param<int>("ik_selected_chain", ik_state.selected_chain, ik_state.selected_chain);
+        if (!ik_state.chains.empty()) {
+            ik_state.selected_chain = std::clamp(ik_state.selected_chain, 0, static_cast<int>(ik_state.chains.size()) - 1);
+        }
         ik_state.marker_targets.resize(ik_state.chains.size());
     }
 
-    ros::NodeHandle ros_nh_private("~");
     ros_nh_private.param<std::string>("ik_target_pose_topic", ik_state.external_target_topic, ik_state.external_target_topic);
     ros_nh_private.param<std::string>("ik_target_pose_frame", ik_state.external_target_expected_frame,
                                       ik_state.external_target_expected_frame);
     ros_nh_private.param<bool>("enable_external_ik_target", ik_state.use_external_target, ik_state.use_external_target);
+    ros_nh_private.param<bool>("external_ik_target_position_only", ik_state.external_target_position_only,
+                               ik_state.external_target_position_only);
 
     ros::Subscriber external_target_sub = ros_nh_private.subscribe<geometry_msgs::PoseStamped>(
         ik_state.external_target_topic, 20, [&](const geometry_msgs::PoseStamped::ConstPtr& msg) {
@@ -777,16 +798,19 @@ int main(int argc, char** argv) {
             if (ik_state.solve_mode == "full_body") {
                 std::vector<glm::mat4> targets_world(static_cast<size_t>(ik_state.chains.size()), glm::mat4(1.0f));
                 for (int i = 0; i < static_cast<int>(ik_state.chains.size()); ++i) {
-                    if (ensureMarkerTargetInitialized(i)) {
-                        const auto& target                    = ik_state.marker_targets[i];
-                        targets_world[static_cast<size_t>(i)] = markerWorldMatrix(target.pos, target.rpy_deg);
+                    if (i == ik_state.selected_chain) {
+                        targets_world[static_cast<size_t>(i)] = active_target_world;
                         continue;
                     }
+
                     glm::vec3 tip_pos(0.0f);
                     glm::vec3 tip_rpy(0.0f);
                     if (ik_state.solver.fetchTipWorldPose(scene, i, &tip_pos, &tip_rpy)) {
                         const glm::vec3 tip_rpy_deg(glm::degrees(tip_rpy.x), glm::degrees(tip_rpy.y), glm::degrees(tip_rpy.z));
                         targets_world[static_cast<size_t>(i)] = markerWorldMatrix(tip_pos, tip_rpy_deg);
+                    } else if (ensureMarkerTargetInitialized(i)) {
+                        const auto& target                    = ik_state.marker_targets[i];
+                        targets_world[static_cast<size_t>(i)] = markerWorldMatrix(target.pos, target.rpy_deg);
                     } else {
                         targets_world[static_cast<size_t>(i)] = active_target_world;
                     }
@@ -816,7 +840,7 @@ int main(int argc, char** argv) {
                 ik_state.marker_rpy_deg[2] = glm::degrees(rpy.z);
             }
             saveActiveMarkerToTarget();
-            applyIkForActiveChain(false, false, false);
+            applyIkForActiveChain(false, false, ik_state.external_target_position_only);
             ik_state.external_target_dirty = false;
         }
 
@@ -857,13 +881,22 @@ int main(int argc, char** argv) {
                 snap_ptr       = snap_values;
             }
 
-            bool manipulated =
-                ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), op, mode, glm::value_ptr(gizmo_world), nullptr, snap_ptr);
+            glm::mat4 gizmo_delta(1.0f);
+            bool manipulated = ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), op, mode, glm::value_ptr(gizmo_world),
+                                                    glm::value_ptr(gizmo_delta), snap_ptr);
             bool gizmo_using = ImGuizmo::IsUsing();
             bool gizmo_over  = ImGuizmo::IsOver();
+            bool current_drag_position_only = (op == ImGuizmo::TRANSLATE);
+            if (ik_state.gizmo_operation == 2) {
+                const glm::vec3 deltaTranslation(gizmo_delta[3]);
+                const glm::quat deltaRotation = glm::quat_cast(gizmo_delta);
+                const float rotationAmount    = glm::abs(glm::angle(deltaRotation));
+                current_drag_position_only = glm::length(deltaTranslation) > 1e-6f && rotationAmount < glm::radians(0.25f);
+            }
             if (manipulated || gizmo_using) {
                 ik_state.dragging_marker       = true;
                 ik_state.gizmo_drag_interacted = true;
+                ik_state.gizmo_drag_position_only = current_drag_position_only;
                 glm::vec3 p                    = glm::vec3(gizmo_world[3]);
                 glm::quat q                    = glm::quat_cast(gizmo_world);
                 glm::vec3 rpy                  = glm::eulerAngles(q);
@@ -889,9 +922,7 @@ int main(int argc, char** argv) {
                 }
                 const double interval_sec = 1.0 / static_cast<double>(effective_hz);
                 if (ik_state.last_realtime_ik_apply_sec < 0.0 || (now_sec - ik_state.last_realtime_ik_apply_sec) >= interval_sec) {
-                    const bool prefer_position_only_target =
-                        (op == ImGuizmo::TRANSLATE) && (ik_state.gizmo_operation == 0 || ik_state.gizmo_operation == 2);
-                    applyIkForActiveChain(false, true, prefer_position_only_target);
+                    applyIkForActiveChain(false, true, current_drag_position_only);
                     ik_state.last_realtime_ik_apply_sec = now_sec;
                     ik_state.gizmo_pose_dirty           = false;
                 }
@@ -899,9 +930,10 @@ int main(int argc, char** argv) {
 
             // Sync IK only when drag ends (mouse release / gizmo released)
             if (!gizmo_using && ik_state.gizmo_was_using && ik_state.gizmo_drag_interacted) {
-                applyIkForActiveChain(false, false, false);
-                ik_state.gizmo_pose_dirty      = false;
-                ik_state.gizmo_drag_interacted = false;
+                applyIkForActiveChain(false, false, ik_state.gizmo_drag_position_only);
+                ik_state.gizmo_pose_dirty         = false;
+                ik_state.gizmo_drag_interacted    = false;
+                ik_state.gizmo_drag_position_only = true;
             }
             ik_state.gizmo_was_using = gizmo_using;
             ik_state.gizmo_was_over  = gizmo_over;

@@ -50,11 +50,15 @@ endif()
 if (NOT ROOT_DEVEL_ARCH_PATH)
     set(ROOT_DEVEL_ARCH_PATH /opt/galbot/devel/${ARCH_FREFIX})
 endif ()
+if (NOT CONTROL_DEVEL_ARCH_PATH)
+    set(CONTROL_DEVEL_ARCH_PATH /opt/galbot/devel_control/${ARCH_FREFIX})
+endif ()
 cmake_print_variables(CMAKE_INSTALL_PREFIX)
 
 # 设定默认三方库配置文件查找路径
 list(APPEND CMAKE_PREFIX_PATH 0 ${CMAKE_INSTALL_PREFIX})
 list(APPEND CMAKE_PREFIX_PATH ${ROOT_DEVEL_ARCH_PATH})
+list(APPEND CMAKE_PREFIX_PATH ${CONTROL_DEVEL_ARCH_PATH})
 cmake_print_variables(CMAKE_PREFIX_PATH)
 # 打印第三方库配置文件寻找过程
 set(CMAKE_FIND_DEBUG_MODE 0)
@@ -70,23 +74,9 @@ find_package(Boost REQUIRED COMPONENTS thread)
 find_package(OpenGL REQUIRED)
 find_package(ASSIMP REQUIRED)
 find_package(GLEW REQUIRED)
+find_package(pinocchio REQUIRED)
 find_package(tinyxml2 QUIET)
 find_package(qpOASES QUIET)
-
-set(FLEX_IK_ROOT "$ENV{HOME}/Workspace/flex_ik" CACHE PATH "flex_ik repository root")
-find_path(FLEX_IK_INCLUDE_DIR NAMES flex_ik.h PATHS ${FLEX_IK_ROOT}/include)
-find_library(FLEX_IK_LIBRARY NAMES flex_ik PATHS ${FLEX_IK_ROOT}/build/lib ${FLEX_IK_ROOT}/lib)
-if (NOT FLEX_IK_INCLUDE_DIR OR NOT FLEX_IK_LIBRARY)
-    message(FATAL_ERROR "flex_ik not found. Please set FLEX_IK_ROOT to your flex_ik repo path.")
-endif()
-
-set(WHOLE_BODY_CONTROL_ROOT "$ENV{HOME}/Workspace/SingoriX/Experimental/whole_body_control" CACHE PATH "whole_body_control repository root")
-find_path(WHOLE_BODY_CONTROL_INCLUDE_DIR NAMES wbc/robot/traits/chain_ik.h PATHS ${WHOLE_BODY_CONTROL_ROOT}/include)
-find_library(WHOLE_BODY_CONTROL_LIBRARY NAMES whole_body_control
-             PATHS ${WHOLE_BODY_CONTROL_ROOT}/build-x86_64-Linux-GNU-9.4.0 ${WHOLE_BODY_CONTROL_ROOT}/build/lib ${WHOLE_BODY_CONTROL_ROOT}/lib)
-if (NOT WHOLE_BODY_CONTROL_INCLUDE_DIR OR NOT WHOLE_BODY_CONTROL_LIBRARY)
-    message(FATAL_ERROR "whole_body_control not found. Please set WHOLE_BODY_CONTROL_ROOT correctly.")
-endif()
 
 if (NOT qpOASES_FOUND)
     find_library(QPOASES_LIBRARY NAMES qpOASES
@@ -142,8 +132,8 @@ include_directories(
     ${EIGEN3_INCLUDE_DIRS}
     ${EMBOSA_INCLUDE_DIR}
     ${trac_ik_INCLUDE_DIR}
-    ${FLEX_IK_INCLUDE_DIR}
-    ${WHOLE_BODY_CONTROL_INCLUDE_DIR}
+    ${PROJECT_SOURCE_DIR}/include/teleop_viewer/ik_backends/flex_ik
+    ${PROJECT_SOURCE_DIR}/include/teleop_viewer/ik_backends/wbc_chain_ik
 )
 
 link_directories(
@@ -165,6 +155,21 @@ add_library(imgui_glfw_support
 add_library(imguizmo
     deps/imguizmo/ImGuizmo.cpp
 )
+
+add_library(flex_ik_core STATIC
+    src/teleop_viewer/ik_backends/flex_ik/flex_ik.cc
+)
+target_include_directories(flex_ik_core PUBLIC include/teleop_viewer/ik_backends/flex_ik)
+target_link_libraries(flex_ik_core PUBLIC Eigen3::Eigen pinocchio::pinocchio)
+
+add_library(wbc_chain_ik_core STATIC
+    src/teleop_viewer/ik_backends/wbc_chain_ik/robot/traits/chain_ik.cpp
+    src/teleop_viewer/ik_backends/wbc_chain_ik/solver/hqp_solver.cpp
+    src/teleop_viewer/ik_backends/wbc_chain_ik/solver/qp_solver.cpp
+    src/teleop_viewer/ik_backends/wbc_chain_ik/math/helper_functions.cpp
+)
+target_include_directories(wbc_chain_ik_core PUBLIC include/teleop_viewer/ik_backends/wbc_chain_ik)
+target_link_libraries(wbc_chain_ik_core PUBLIC Eigen3::Eigen pinocchio::pinocchio)
 
 # 将你的库与必要的依赖项链接：ImGui本身、GLFW、OpenGL
 target_link_libraries(imgui_glfw_support PUBLIC imgui glfw OpenGL::GL)
@@ -221,8 +226,8 @@ target_link_libraries(robot_kinematic_viewer
     urdfdom_world
     urdfdom_sensor
     ${trac_ik_LIBRARIES}
-    ${FLEX_IK_LIBRARY}
-    ${WHOLE_BODY_CONTROL_LIBRARY}
+    flex_ik_core
+    wbc_chain_ik_core
     OpenGL::GL
     glfw
     GLEW::GLEW

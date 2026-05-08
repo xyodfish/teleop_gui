@@ -74,7 +74,8 @@ namespace omnilink::teleop_viewer {
         bool initializeFullBodySolvers(const std::string& urdfPath, const std::vector<ViewerIkChainConfig>& chains);
         flex_ik::Vector buildFullBodyQFromScene(const RobotScene& scene) const;
         void applyFullBodyQToScene(RobotScene* scene, const flex_ik::Vector& q) const;
-        flex_ik::Vector limitFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode) const;
+        flex_ik::Vector limitFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode,
+                                           bool positionOnlyMode) const;
 
         std::vector<IkChainRuntime> chains_;
         std::unique_ptr<flex_ik::FlexIk> fullBodySolverPose_;
