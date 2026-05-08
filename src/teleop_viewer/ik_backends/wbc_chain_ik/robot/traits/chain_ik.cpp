@@ -110,6 +110,7 @@ IkResult ChainIkTrait::solveIK(const Vector& q_current, bool verbose) {
         const auto& qp_output = hqp_solver.solve(hqp_data);
 
         if (qp_output.status != solver::QPStatus::OPTIMAL) {
+            result.solution = q_out;
             result.success = false;
             result.converged = false;
             result.time_spent =
@@ -133,6 +134,7 @@ IkResult ChainIkTrait::solveIK(const Vector& q_current, bool verbose) {
 
         count++;
     }
+    result.solution = q_out;
     result.success = false;
     result.converged = converged;
     result.time_spent = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - time_start).count();

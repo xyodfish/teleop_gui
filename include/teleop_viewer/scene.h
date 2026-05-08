@@ -72,6 +72,7 @@ class RobotScene {
     std::vector<JointInfo> getJointInfos() const;
     std::vector<JointAxisInfo> getJointAxisInfos(bool revolute_only = true) const;
     std::vector<LinkTfInfo> getLinkTfInfos() const;
+    bool getLinkWorldTransform(const std::string& link_name, glm::mat4* out_world_transform) const;
 
     void setFixedBaseMode(bool enabled);
     bool fixedBaseMode() const;

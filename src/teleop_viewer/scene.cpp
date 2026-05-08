@@ -682,6 +682,18 @@ std::vector<RobotScene::LinkTfInfo> RobotScene::getLinkTfInfos() const {
     return infos;
 }
 
+bool RobotScene::getLinkWorldTransform(const std::string& link_name, glm::mat4* out_world_transform) const {
+    if (out_world_transform == nullptr) {
+        return false;
+    }
+    const auto it = impl_->transforms.find(link_name);
+    if (it == impl_->transforms.end()) {
+        return false;
+    }
+    *out_world_transform = it->second;
+    return true;
+}
+
 void RobotScene::setFixedBaseMode(bool enabled) { impl_->fixed_base_mode = enabled; }
 bool RobotScene::fixedBaseMode() const { return impl_->fixed_base_mode; }
 

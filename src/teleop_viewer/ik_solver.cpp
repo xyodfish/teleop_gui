@@ -9,17 +9,6 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace omnilink::teleop_viewer::ik_solver_detail {
-
-    glm::mat4 makeWorldTransform(const glm::vec3& worldPosition, const glm::vec3& worldRpy) {
-        glm::mat4 transform = glm::translate(glm::mat4(1.0f), worldPosition);
-        // Keep exactly the same convention as legacy robot_kinematic_viewer path.
-        transform = transform * glm::mat4_cast(glm::quat(worldRpy));
-        return transform;
-    }
-
-}  // namespace omnilink::teleop_viewer::ik_solver_detail
-
 namespace omnilink::teleop_viewer {
 
     void IkSolver::setFullBodyBackend(const std::string& backendName) {
@@ -92,19 +81,14 @@ namespace omnilink::teleop_viewer {
         if (worldTransform == nullptr) {
             return false;
         }
-
-        const auto transforms = scene.getLinkTfInfos();
-        for (const auto& tf : transforms) {
-            if (tf.name != linkName) {
-                continue;
-            }
-            *worldTransform = ik_solver_detail::makeWorldTransform(tf.world_position, tf.world_rpy);
-            if (worldRpy != nullptr) {
-                *worldRpy = tf.world_rpy;
-            }
-            return true;
+        if (!scene.getLinkWorldTransform(linkName, worldTransform)) {
+            return false;
         }
-        return false;
+        if (worldRpy != nullptr) {
+            const glm::quat q = glm::quat_cast(*worldTransform);
+            *worldRpy         = glm::eulerAngles(q);
+        }
+        return true;
     }
 
     bool IkSolver::fetchTipWorldPose(const RobotScene& scene, int chainIndex, glm::vec3* worldPos, glm::vec3* worldRpy) const {
@@ -503,6 +487,9 @@ namespace omnilink::teleop_viewer {
             wbcSolver->setMaxIters(fastMode ? std::max(positionOnlyMode ? 12 : 60, iterations * (positionOnlyMode ? 6 : 24))
                                              : std::max(50, iterations * 25));
             wbcSolver->setTolerance(fastMode ? (positionOnlyMode ? 3e-4 : 8e-4) : 1e-4);
+            // Keep motion regularized, but avoid over-penalizing joint motion;
+            // excessive damping here causes large tip position residuals during rotation drag.
+            wbcSolver->setJointWeights(0.8);
 
             for (int i = 0; i < chainCount(); ++i) {
                 if (!chains_[i].status.ready) {

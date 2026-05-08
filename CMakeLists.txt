@@ -77,6 +77,8 @@ find_package(GLEW REQUIRED)
 find_package(pinocchio REQUIRED)
 find_package(tinyxml2 QUIET)
 find_package(qpOASES QUIET)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ROSCPP REQUIRED IMPORTED_TARGET roscpp)
 
 if (NOT qpOASES_FOUND)
     find_library(QPOASES_LIBRARY NAMES qpOASES
@@ -231,6 +233,7 @@ target_link_libraries(robot_kinematic_viewer
     OpenGL::GL
     glfw
     GLEW::GLEW
+    PkgConfig::ROSCPP
     pthread
     yaml-cpp
 )

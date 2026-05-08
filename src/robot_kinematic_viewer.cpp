@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 
 #include <geometry_msgs/PoseStamped.h>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -240,18 +241,20 @@ void main() {
         bool realtime_ik_during_drag      = true;
         float realtime_ik_hz              = 30.0f;
         double last_realtime_ik_apply_sec = -1.0;
-        float gizmo_size_clip_space       = 0.22f;
+        float gizmo_size_clip_space       = 0.11f;
         bool translate_snap_enabled       = false;
         bool rotate_snap_enabled          = false;
         float translate_snap_step_m       = 0.01f;
         float rotate_snap_step_deg        = 5.0f;
+        bool refine_single_chain_on_drag_end = true;
+        bool refine_only_when_rotation       = false;
 
         // External RViz interactive marker input (PoseStamped).
-        bool use_external_target          = true;
-        bool external_target_received     = false;
-        bool external_target_dirty        = false;
+        bool use_external_target           = true;
+        bool external_target_received      = false;
+        bool external_target_dirty         = false;
         bool external_target_position_only = true;
-        std::string external_target_topic = "/teleop_gui/ik_target_pose";
+        std::string external_target_topic  = "/teleop_gui/ik_target_pose";
         std::string external_target_expected_frame;
         std::string external_target_last_frame;
         glm::vec3 external_target_pos        = glm::vec3(0.0f);
@@ -828,8 +831,61 @@ int main(int argc, char** argv) {
             return ik_state.solver.solveSingleChain(&scene, ik_state.selected_chain, active_target_world, &ik_state.last_status);
         };
 
+        auto refineActiveChainToMarker = [&]() -> bool {
+            if (ik_state.selected_chain < 0 || ik_state.selected_chain >= static_cast<int>(ik_state.chains.size())) {
+                return false;
+            }
+            const auto& chain_status = ik_state.chains[ik_state.selected_chain];
+            if (!chain_status.ready) {
+                return false;
+            }
+            const glm::vec3 marker_pos(ik_state.marker_pos[0], ik_state.marker_pos[1], ik_state.marker_pos[2]);
+            const glm::vec3 marker_rpy_deg(ik_state.marker_rpy_deg[0], ik_state.marker_rpy_deg[1], ik_state.marker_rpy_deg[2]);
+            const glm::mat4 target_world = markerWorldMatrix(marker_pos, marker_rpy_deg);
+            std::string refine_status;
+            const bool refined = ik_state.solver.solveSingleChain(&scene, ik_state.selected_chain, target_world, &refine_status);
+            if (refined) {
+                if (ik_state.last_status.empty()) {
+                    ik_state.last_status = "末端精修完成(single_chain)";
+                } else {
+                    ik_state.last_status += " | 末端精修完成(single_chain)";
+                }
+                return true;
+            }
+            if (!refine_status.empty()) {
+                if (ik_state.last_status.empty()) {
+                    ik_state.last_status = "末端精修失败: " + refine_status;
+                } else {
+                    ik_state.last_status += " | 末端精修失败: " + refine_status;
+                }
+            }
+            return false;
+        };
+
+        auto activeChainPositionErrorMmToMarker = [&]() -> float {
+            if (ik_state.selected_chain < 0 || ik_state.selected_chain >= static_cast<int>(ik_state.chains.size())) {
+                return 0.0f;
+            }
+            glm::vec3 tip_pos(0.0f);
+            glm::vec3 tip_rpy(0.0f);
+            if (!ik_state.solver.fetchTipWorldPose(scene, ik_state.selected_chain, &tip_pos, &tip_rpy)) {
+                return 0.0f;
+            }
+            const glm::vec3 marker_pos(ik_state.marker_pos[0], ik_state.marker_pos[1], ik_state.marker_pos[2]);
+            return glm::length(marker_pos - tip_pos) * 1000.0f;
+        };
+
         // External RViz interactive marker target -> local marker -> IK.
         if (ik_state.use_external_target && ik_state.external_target_dirty && !ik_state.dragging_marker) {
+            const glm::vec3 prev_marker_pos(ik_state.marker_pos[0], ik_state.marker_pos[1], ik_state.marker_pos[2]);
+            const glm::vec3 prev_marker_rpy_deg(ik_state.marker_rpy_deg[0], ik_state.marker_rpy_deg[1], ik_state.marker_rpy_deg[2]);
+            const glm::quat prev_marker_quat = glm::normalize(glm::quat_cast(markerWorldMatrix(prev_marker_pos, prev_marker_rpy_deg)));
+            const glm::quat target_quat      = glm::normalize(ik_state.external_target_quat);
+            float external_rotation_delta    = glm::abs(glm::angle(glm::inverse(prev_marker_quat) * target_quat));
+            if (external_rotation_delta > glm::pi<float>()) {
+                external_rotation_delta = glm::two_pi<float>() - external_rotation_delta;
+            }
+
             ik_state.marker_pos[0] = ik_state.external_target_pos.x;
             ik_state.marker_pos[1] = ik_state.external_target_pos.y;
             ik_state.marker_pos[2] = ik_state.external_target_pos.z;
@@ -840,7 +896,9 @@ int main(int argc, char** argv) {
                 ik_state.marker_rpy_deg[2] = glm::degrees(rpy.z);
             }
             saveActiveMarkerToTarget();
-            applyIkForActiveChain(false, false, ik_state.external_target_position_only);
+            const bool external_position_only =
+                ik_state.external_target_position_only && external_rotation_delta < glm::radians(0.5f);
+            applyIkForActiveChain(false, false, external_position_only);
             ik_state.external_target_dirty = false;
         }
 
@@ -891,18 +949,18 @@ int main(int argc, char** argv) {
                 const glm::vec3 deltaTranslation(gizmo_delta[3]);
                 const glm::quat deltaRotation = glm::quat_cast(gizmo_delta);
                 const float rotationAmount    = glm::abs(glm::angle(deltaRotation));
-                current_drag_position_only = glm::length(deltaTranslation) > 1e-6f && rotationAmount < glm::radians(0.25f);
+                current_drag_position_only    = glm::length(deltaTranslation) > 1e-6f && rotationAmount < glm::radians(0.25f);
             }
             if (manipulated || gizmo_using) {
-                ik_state.dragging_marker       = true;
-                ik_state.gizmo_drag_interacted = true;
+                ik_state.dragging_marker          = true;
+                ik_state.gizmo_drag_interacted    = true;
                 ik_state.gizmo_drag_position_only = current_drag_position_only;
-                glm::vec3 p                    = glm::vec3(gizmo_world[3]);
-                glm::quat q                    = glm::quat_cast(gizmo_world);
-                glm::vec3 rpy                  = glm::eulerAngles(q);
-                ik_state.marker_pos[0]         = p.x;
-                ik_state.marker_pos[1]         = p.y;
-                ik_state.marker_pos[2]         = p.z;
+                glm::vec3 p                       = glm::vec3(gizmo_world[3]);
+                glm::quat q                       = glm::quat_cast(gizmo_world);
+                glm::vec3 rpy                     = glm::eulerAngles(q);
+                ik_state.marker_pos[0]            = p.x;
+                ik_state.marker_pos[1]            = p.y;
+                ik_state.marker_pos[2]            = p.z;
                 if (!ik_state.lock_orientation) {
                     ik_state.marker_rpy_deg[0] = glm::degrees(rpy.x);
                     ik_state.marker_rpy_deg[1] = glm::degrees(rpy.y);
@@ -918,7 +976,7 @@ int main(int argc, char** argv) {
             if (gizmo_using && ik_state.gizmo_pose_dirty && ik_state.realtime_ik_during_drag) {
                 float effective_hz = std::max(1.0f, ik_state.realtime_ik_hz);
                 if (ik_state.solve_mode == "full_body") {
-                    effective_hz = std::min(effective_hz, 12.0f);
+                    effective_hz = std::min(effective_hz, current_drag_position_only ? 12.0f : 4.0f);
                 }
                 const double interval_sec = 1.0 / static_cast<double>(effective_hz);
                 if (ik_state.last_realtime_ik_apply_sec < 0.0 || (now_sec - ik_state.last_realtime_ik_apply_sec) >= interval_sec) {
@@ -931,6 +989,22 @@ int main(int argc, char** argv) {
             // Sync IK only when drag ends (mouse release / gizmo released)
             if (!gizmo_using && ik_state.gizmo_was_using && ik_state.gizmo_drag_interacted) {
                 applyIkForActiveChain(false, false, ik_state.gizmo_drag_position_only);
+                const bool drag_had_rotation = !ik_state.gizmo_drag_position_only;
+                const bool should_refine_with_single_chain =
+                    ik_state.solve_mode == "full_body" && ik_state.refine_single_chain_on_drag_end &&
+                    (!ik_state.refine_only_when_rotation || drag_had_rotation);
+                if (should_refine_with_single_chain) {
+                    // Strongly close tip-to-marker gap after full-body drag end.
+                    for (int pass = 0; pass < 3; ++pass) {
+                        const float err_mm = activeChainPositionErrorMmToMarker();
+                        if (err_mm <= 1.0f) {
+                            break;
+                        }
+                        if (!refineActiveChainToMarker()) {
+                            break;
+                        }
+                    }
+                }
                 ik_state.gizmo_pose_dirty         = false;
                 ik_state.gizmo_drag_interacted    = false;
                 ik_state.gizmo_drag_position_only = true;
@@ -1216,8 +1290,14 @@ int main(int argc, char** argv) {
                 if (ik_state.realtime_ik_during_drag) {
                     ImGui::SliderFloat("实时IK频率(Hz)", &ik_state.realtime_ik_hz, 5.0f, 120.0f, "%.0f");
                     if (ik_state.solve_mode == "full_body") {
-                        ImGui::TextDisabled("full_body 拖动时频率自动上限 12Hz（防卡顿）");
+                        ImGui::TextDisabled("full_body 拖动时频率自动上限：平移12Hz，姿态4Hz");
                         ImGui::TextDisabled("full_body 平移拖动走位置优先，旋转拖动走姿态求解");
+                    }
+                }
+                if (ik_state.solve_mode == "full_body") {
+                    ImGui::Checkbox("松手后末端精修(single_chain)", &ik_state.refine_single_chain_on_drag_end);
+                    if (ik_state.refine_single_chain_on_drag_end) {
+                        ImGui::Checkbox("仅旋转拖动时触发精修", &ik_state.refine_only_when_rotation);
                     }
                 }
                 ImGui::Checkbox("平移吸附", &ik_state.translate_snap_enabled);
