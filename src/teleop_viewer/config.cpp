@@ -35,6 +35,28 @@ void ReadStringList(const YAML::Node& node, const char* key, std::vector<std::st
     }
 }
 
+void ReadIkChainList(const YAML::Node& node, const char* key, std::vector<ViewerIkChainConfig>& out) {
+    if (!node || !node[key] || !node[key].IsSequence()) {
+        return;
+    }
+    std::vector<ViewerIkChainConfig> parsed;
+    for (const auto& item : node[key]) {
+        if (!item || !item.IsMap()) {
+            continue;
+        }
+        ViewerIkChainConfig chain;
+        ReadScalar(item, "label", chain.label);
+        ReadScalar(item, "base_link", chain.base_link);
+        ReadScalar(item, "tip_link", chain.tip_link);
+        if (!chain.base_link.empty() && !chain.tip_link.empty()) {
+            parsed.push_back(std::move(chain));
+        }
+    }
+    if (!parsed.empty()) {
+        out = std::move(parsed);
+    }
+}
+
 }  // namespace
 
 ViewerConfig ViewerConfig::LoadFromFile(const std::string& yaml_path, bool* loaded_ok) {
@@ -95,6 +117,11 @@ ViewerConfig ViewerConfig::LoadFromFile(const std::string& yaml_path, bool* load
         ReadScalar(root["ui"], "auto_start_recording", cfg.ui.auto_start_recording);
         ReadScalar(root["ui"], "cjk_font_path", cfg.ui.cjk_font_path);
         ReadScalar(root["ui"], "cjk_font_size", cfg.ui.cjk_font_size);
+
+        ReadScalar(root["ik"], "mode", cfg.ik.mode);
+        ReadScalar(root["ik"], "full_body_backend", cfg.ik.full_body_backend);
+        ReadScalar(root["ik"], "full_body_iterations", cfg.ik.full_body_iterations);
+        ReadIkChainList(root["ik"], "chains", cfg.ik.chains);
 
         ok = true;
     } catch (const std::exception& e) {

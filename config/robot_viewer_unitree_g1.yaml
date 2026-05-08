@@ -61,3 +61,15 @@ ui:
   auto_start_recording: false
   cjk_font_path: ""
   cjk_font_size: 18.0
+
+ik:
+  mode: "single_chain" # single_chain | full_body
+  full_body_backend: "flex_ik" # flex_ik | wbc_chain_ik
+  full_body_iterations: 3
+  chains:
+    - label: "右臂"
+      base_link: "torso_base_link"
+      tip_link: "right_arm_end_effector_mount_link"
+    - label: "左臂"
+      base_link: "torso_base_link"
+      tip_link: "left_arm_end_effector_mount_link"

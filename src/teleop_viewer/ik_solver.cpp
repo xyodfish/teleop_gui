@@ -1,0 +1,646 @@
+#include "teleop_viewer/ik_solver.h"
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <pinocchio/algorithm/joint-configuration.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <sstream>
+#include <stdexcept>
+
+namespace omnilink::teleop_viewer::ik_solver_detail {
+
+    glm::mat4 makeWorldTransform(const glm::vec3& worldPosition, const glm::vec3& worldRpy) {
+        glm::mat4 transform = glm::translate(glm::mat4(1.0f), worldPosition);
+        // Keep exactly the same convention as legacy robot_kinematic_viewer path.
+        transform = transform * glm::mat4_cast(glm::quat(worldRpy));
+        return transform;
+    }
+
+}  // namespace omnilink::teleop_viewer::ik_solver_detail
+
+namespace omnilink::teleop_viewer {
+
+    void IkSolver::setFullBodyBackend(const std::string& backendName) {
+        if (backendName == "wbc_chain_ik") {
+            fullBodyBackend_ = "wbc_chain_ik";
+            return;
+        }
+        fullBodyBackend_ = "flex_ik";
+    }
+
+    const std::string& IkSolver::fullBodyBackend() const {
+        return fullBodyBackend_;
+    }
+
+    bool IkSolver::initialize(const std::string& urdfPath, const std::vector<ViewerIkChainConfig>& chains) {
+        chains_.clear();
+        chains_.reserve(chains.size());
+
+        for (const auto& chain : chains) {
+            IkChainRuntime runtime;
+            runtime.status.config = chain;
+            runtime.solver = std::make_unique<TRAC_IK::TRAC_IK>(chain.base_link, chain.tip_link, urdfPath, 200, 0.005, 1e-5, 1, false,
+                                                                false, TRAC_IK::Speed);
+            if (!runtime.solver->getKDLChain(runtime.chain) || !runtime.solver->getKDLLimits(runtime.lower, runtime.upper)) {
+                runtime.status.ready = false;
+                runtime.status.error = "TRAC-IK 初始化失败: " + chain.base_link + " -> " + chain.tip_link;
+                chains_.push_back(std::move(runtime));
+                continue;
+            }
+
+            runtime.jointNames.clear();
+            runtime.jointNames.reserve(static_cast<size_t>(runtime.chain.getNrOfJoints()));
+            for (unsigned int i = 0; i < runtime.chain.getNrOfSegments(); ++i) {
+                const auto& segment = runtime.chain.getSegment(i);
+                if (segment.getJoint().getType() != KDL::Joint::None) {
+                    runtime.jointNames.push_back(segment.getJoint().getName());
+                }
+            }
+
+            if (runtime.jointNames.size() != static_cast<size_t>(runtime.chain.getNrOfJoints())) {
+                runtime.status.ready = false;
+                runtime.status.error = "关节名数量与链关节数不一致";
+                chains_.push_back(std::move(runtime));
+                continue;
+            }
+
+            runtime.status.ready = true;
+            runtime.status.error.clear();
+            chains_.push_back(std::move(runtime));
+        }
+
+        initializeFullBodySolvers(urdfPath, chains);
+        return !chains_.empty();
+    }
+
+    int IkSolver::chainCount() const {
+        return static_cast<int>(chains_.size());
+    }
+
+    const IkChainStatus& IkSolver::chainStatus(int chainIndex) const {
+        static IkChainStatus invalid;
+        if (chainIndex < 0 || chainIndex >= chainCount()) {
+            return invalid;
+        }
+        return chains_[chainIndex].status;
+    }
+
+    bool IkSolver::findLinkWorldTransform(const RobotScene& scene, const std::string& linkName, glm::mat4* worldTransform,
+                                          glm::vec3* worldRpy) const {
+        if (worldTransform == nullptr) {
+            return false;
+        }
+
+        const auto transforms = scene.getLinkTfInfos();
+        for (const auto& tf : transforms) {
+            if (tf.name != linkName) {
+                continue;
+            }
+            *worldTransform = ik_solver_detail::makeWorldTransform(tf.world_position, tf.world_rpy);
+            if (worldRpy != nullptr) {
+                *worldRpy = tf.world_rpy;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    bool IkSolver::fetchTipWorldPose(const RobotScene& scene, int chainIndex, glm::vec3* worldPos, glm::vec3* worldRpy) const {
+        if (chainIndex < 0 || chainIndex >= chainCount()) {
+            return false;
+        }
+        if (!worldPos || !worldRpy) {
+            return false;
+        }
+
+        glm::mat4 worldTransform(1.0f);
+        if (!findLinkWorldTransform(scene, chains_[chainIndex].status.config.tip_link, &worldTransform, worldRpy)) {
+            return false;
+        }
+        *worldPos = glm::vec3(worldTransform[3]);
+        return true;
+    }
+
+    KDL::Frame IkSolver::glmToKdlFrame(const glm::mat4& transform) {
+        const glm::vec3 p = glm::vec3(transform[3]);
+        const glm::quat q = glm::quat_cast(transform);
+        return KDL::Frame(KDL::Rotation::Quaternion(q.x, q.y, q.z, q.w), KDL::Vector(p.x, p.y, p.z));
+    }
+
+    flex_ik::SE3 IkSolver::glmToFlexSe3(const glm::mat4& transform) {
+        Eigen::Matrix3d rotation;
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                rotation(row, col) = static_cast<double>(transform[col][row]);
+            }
+        }
+        const Eigen::Vector3d translation(static_cast<double>(transform[3][0]), static_cast<double>(transform[3][1]),
+                                          static_cast<double>(transform[3][2]));
+        return flex_ik::SE3(rotation, translation);
+    }
+
+    KDL::JntArray IkSolver::buildSeedFromScene(const RobotScene& scene, const IkChainRuntime& chainRuntime) const {
+        const size_t jointCount = chainRuntime.jointNames.size();
+        KDL::JntArray seed(jointCount);
+        for (size_t i = 0; i < jointCount; ++i) {
+            RobotScene::JointInfo info;
+            if (scene.getJointInfo(chainRuntime.jointNames[i], &info)) {
+                seed(i) = std::min(chainRuntime.upper(i), std::max(chainRuntime.lower(i), static_cast<double>(info.position)));
+            } else {
+                seed(i) = 0.5 * (chainRuntime.lower(i) + chainRuntime.upper(i));
+            }
+        }
+        return seed;
+    }
+
+    bool IkSolver::solveChainInternal(RobotScene* scene, int chainIndex, const IkChainRuntime& chainRuntime, const glm::mat4& targetWorld,
+                                      int maxRetryCount, float* outPositionErrorMm) {
+        if (scene == nullptr) {
+            return false;
+        }
+
+        glm::mat4 baseWorld(1.0f);
+        if (!findLinkWorldTransform(*scene, chainRuntime.status.config.base_link, &baseWorld, nullptr)) {
+            return false;
+        }
+
+        const glm::mat4 targetInBase = glm::inverse(baseWorld) * targetWorld;
+        const KDL::Frame target      = glmToKdlFrame(targetInBase);
+        KDL::JntArray seed           = buildSeedFromScene(*scene, chainRuntime);
+        KDL::JntArray output(chainRuntime.jointNames.size());
+
+        int rc = chainRuntime.solver->CartToJnt(seed, target, output);
+        if (rc < 0 && maxRetryCount > 0) {
+            for (int i = 0; i < maxRetryCount && rc < 0; ++i) {
+                KDL::Frame perturbed = target;
+                const double dp      = 0.004 * static_cast<double>(i + 1);
+                perturbed.p.x(target.p.x() + dp);
+                perturbed.p.y(target.p.y() - dp);
+                rc = chainRuntime.solver->CartToJnt(seed, perturbed, output);
+            }
+        }
+        if (rc < 0) {
+            return false;
+        }
+
+        for (size_t i = 0; i < chainRuntime.jointNames.size(); ++i) {
+            scene->setJointPositionByName(chainRuntime.jointNames[i], static_cast<float>(output(i)));
+        }
+
+        scene->updateTransforms();
+
+        if (outPositionErrorMm != nullptr) {
+            glm::vec3 tipPos(0.0f);
+            glm::vec3 tipRpy(0.0f);
+            if (fetchTipWorldPose(*scene, chainIndex, &tipPos, &tipRpy)) {
+                const glm::vec3 targetPos = glm::vec3(targetWorld[3]);
+                *outPositionErrorMm       = glm::length(tipPos - targetPos) * 1000.0f;
+            } else {
+                *outPositionErrorMm = 0.0f;
+            }
+        }
+
+        return true;
+    }
+
+    bool IkSolver::solveSingleChain(RobotScene* scene, int chainIndex, const glm::mat4& targetWorld, std::string* statusText) {
+        if (chainIndex < 0 || chainIndex >= chainCount()) {
+            if (statusText) {
+                *statusText = "IK失败：未选择链";
+            }
+            return false;
+        }
+
+        const auto& chainRuntime = chains_[chainIndex];
+        if (!chainRuntime.status.ready || chainRuntime.solver == nullptr) {
+            if (statusText) {
+                *statusText = "IK失败：链未就绪";
+            }
+            return false;
+        }
+
+        if (!solveChainInternal(scene, chainIndex, chainRuntime, targetWorld, 8, nullptr)) {
+            if (statusText) {
+                *statusText = "IK失败：不可达/超时（已做扰动重试）";
+            }
+            return false;
+        }
+
+        if (statusText) {
+            *statusText = "IK成功";
+        }
+        return true;
+    }
+
+    bool IkSolver::initializeFullBodySolvers(const std::string& urdfPath, const std::vector<ViewerIkChainConfig>& chains) {
+        (void)urdfPath;
+        fullBodyReady_     = false;
+        fullBodyFlexReady_ = false;
+        fullBodyWbcReady_  = false;
+        fullBodyError_.clear();
+        fullBodySolverPose_.reset();
+        fullBodySolverPosOnly_.reset();
+        fullBodyWbcSolverPose_.reset();
+        fullBodyWbcSolverPosOnly_.reset();
+        fullBodyJointQIndex_.clear();
+        fullBodyLockedVIndex_.clear();
+
+        try {
+            fullBodySolverPose_    = std::make_unique<flex_ik::FlexIk>(urdfPath);
+            fullBodySolverPosOnly_ = std::make_unique<flex_ik::FlexIk>(urdfPath);
+        } catch (const std::exception& ex) {
+            fullBodyError_ = std::string("flex_ik 初始化失败: ") + ex.what();
+            return false;
+        }
+
+        for (const auto& chain : chains) {
+            if (!fullBodySolverPose_->model().existFrame(chain.tip_link)) {
+                fullBodyError_ = "flex_ik 任务帧不存在: " + chain.tip_link;
+                return false;
+            }
+            try {
+                fullBodySolverPose_->addTask(chain.tip_link, 1.0);
+                flex_ik::Vector6 posMask;
+                posMask << 1.0, 1.0, 1.0, 0.0, 0.0, 0.0;
+                fullBodySolverPosOnly_->addTask(chain.tip_link, posMask, 1.0);
+            } catch (const std::exception& ex) {
+                fullBodyError_ = std::string("flex_ik 添加任务失败: ") + ex.what();
+                return false;
+            }
+        }
+
+        const auto& model = fullBodySolverPose_->model();
+        std::vector<std::string> fixedJointNames;
+        fixedJointNames.reserve(static_cast<size_t>(model.njoints));
+        for (int j = 1; j < model.njoints; ++j) {
+            const std::string& jointName     = model.names[j];
+            const auto& joint                = model.joints[j];
+            const bool isScalarActuatedJoint = (joint.nq() == 1 && joint.nv() == 1);
+            if (!isScalarActuatedJoint) {
+                fixedJointNames.push_back(jointName);
+                const int idxV = joint.idx_v();
+                for (int k = 0; k < joint.nv(); ++k) {
+                    const int vidx = idxV + k;
+                    if (vidx >= 0 && vidx < model.nv) {
+                        fullBodyLockedVIndex_.push_back(vidx);
+                    }
+                }
+                continue;
+            }
+            const int idxQ = joint.idx_q();
+            if (idxQ < 0 || idxQ >= model.nq) {
+                continue;
+            }
+            fullBodyJointQIndex_[jointName] = idxQ;
+        }
+
+        try {
+            fullBodySolverPose_->setFixedJoints(fixedJointNames);
+            fullBodySolverPosOnly_->setFixedJoints(fixedJointNames);
+        } catch (const std::exception& ex) {
+            fullBodyError_ = std::string("flex_ik 固定关节配置失败: ") + ex.what();
+            return false;
+        }
+
+        flex_ik::FlexIk::IterParams poseParams = fullBodySolverPose_->iterativeParams();
+        poseParams.max_iterations              = 80;
+        poseParams.error_tolerance             = 1e-3;
+        poseParams.dq_gain                     = 1.0;
+        poseParams.orientation_gain            = 1.0;
+        fullBodySolverPose_->setIterativeParams(poseParams);
+
+        flex_ik::FlexIk::IterParams posParams = fullBodySolverPosOnly_->iterativeParams();
+        posParams.max_iterations              = 50;
+        posParams.error_tolerance             = 2e-3;
+        posParams.dq_gain                     = 1.0;
+        posParams.orientation_gain            = 1.0;
+        fullBodySolverPosOnly_->setIterativeParams(posParams);
+
+        fullBodyFlexReady_ = true;
+
+        try {
+            std::vector<Wbc::Index> fixedJointV;
+            fixedJointV.reserve(fullBodyLockedVIndex_.size());
+            for (const int idx : fullBodyLockedVIndex_) {
+                fixedJointV.push_back(static_cast<Wbc::Index>(idx));
+            }
+            fullBodyWbcSolverPose_    = std::make_unique<Wbc::robot::ChainIkTrait>(fullBodySolverPose_->model(), fixedJointV);
+            fullBodyWbcSolverPosOnly_ = std::make_unique<Wbc::robot::ChainIkTrait>(fullBodySolverPose_->model(), fixedJointV);
+            for (const auto& chain : chains) {
+                std::array<bool, 6> poseMask = {true, true, true, true, true, true};
+                std::array<bool, 6> posMask  = {true, true, true, false, false, false};
+                fullBodyWbcSolverPose_->addIkTask(chain.tip_link, Wbc::SE3::Identity(), 1.0, poseMask);
+                fullBodyWbcSolverPosOnly_->addIkTask(chain.tip_link, Wbc::SE3::Identity(), 1.0, posMask);
+            }
+            fullBodyWbcSolverPose_->setMaxIters(100);
+            fullBodyWbcSolverPose_->setTolerance(1e-4);
+            fullBodyWbcSolverPose_->setJointWeights(0.6);
+            fullBodyWbcSolverPosOnly_->setMaxIters(80);
+            fullBodyWbcSolverPosOnly_->setTolerance(2e-4);
+            fullBodyWbcSolverPosOnly_->setJointWeights(0.8);
+            fullBodyWbcReady_ = true;
+        } catch (const std::exception& ex) {
+            fullBodyWbcReady_ = false;
+            fullBodyError_ += (fullBodyError_.empty() ? "" : "; ");
+            fullBodyError_ += std::string("wbc_chain_ik 初始化失败: ") + ex.what();
+        }
+
+        fullBodyReady_ = true;
+        return true;
+    }
+
+    flex_ik::Vector IkSolver::buildFullBodyQFromScene(const RobotScene& scene) const {
+        const auto& model = fullBodySolverPose_->model();
+        flex_ik::Vector q = pinocchio::neutral(model);
+        const auto joints = scene.getJointInfos();
+        for (const auto& joint : joints) {
+            auto it = fullBodyJointQIndex_.find(joint.name);
+            if (it == fullBodyJointQIndex_.end()) {
+                continue;
+            }
+            const int idxQ     = it->second;
+            const double lower = model.lowerPositionLimit[idxQ];
+            const double upper = model.upperPositionLimit[idxQ];
+            q[idxQ]            = std::max(lower, std::min(upper, static_cast<double>(joint.position)));
+        }
+        return q;
+    }
+
+    void IkSolver::applyFullBodyQToScene(RobotScene* scene, const flex_ik::Vector& q) const {
+        if (scene == nullptr) {
+            return;
+        }
+        for (const auto& kv : fullBodyJointQIndex_) {
+            const int idxQ = kv.second;
+            if (idxQ < 0 || idxQ >= q.size()) {
+                continue;
+            }
+            RobotScene::JointInfo jointInfo;
+            const bool hasJointInfo = scene->getJointInfo(kv.first, &jointInfo);
+            float value             = static_cast<float>(q[idxQ]);
+            if (hasJointInfo && jointInfo.revolute) {
+                value = std::clamp(value, jointInfo.min_angle, jointInfo.max_angle);
+            }
+            scene->setJointPositionByName(kv.first, value);
+        }
+        scene->updateTransforms();
+    }
+
+    flex_ik::Vector IkSolver::limitFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode) const {
+        flex_ik::Vector qOut = qCurrent;
+        if (qCurrent.size() != qSolved.size()) {
+            return qOut;
+        }
+        if (fullBodySolverPose_ == nullptr) {
+            return qOut;
+        }
+
+        const auto& model     = fullBodySolverPose_->model();
+        const double maxDelta = fastMode ? 0.06 : 0.14;
+        for (const auto& kv : fullBodyJointQIndex_) {
+            const int idxQ = kv.second;
+            if (idxQ < 0 || idxQ >= qSolved.size() || idxQ >= qCurrent.size()) {
+                continue;
+            }
+
+            const double target  = qSolved[idxQ];
+            const double current = qCurrent[idxQ];
+            if (!std::isfinite(target) || !std::isfinite(current)) {
+                continue;
+            }
+
+            double lower = model.lowerPositionLimit[idxQ];
+            double upper = model.upperPositionLimit[idxQ];
+            if (!std::isfinite(lower) || lower < -1e6) {
+                lower = -3.14159265358979323846;
+            }
+            if (!std::isfinite(upper) || upper > 1e6) {
+                upper = 3.14159265358979323846;
+            }
+            if (lower > upper) {
+                std::swap(lower, upper);
+            }
+
+            const double boundedTarget = std::clamp(target, lower, upper);
+            const double delta         = std::clamp(boundedTarget - current, -maxDelta, maxDelta);
+            qOut[idxQ]                 = current + delta;
+        }
+        return qOut;
+    }
+
+    bool IkSolver::solveFullBody(RobotScene* scene, const std::vector<glm::mat4>& targetWorldByChain, int iterations, int activeChainIndex,
+                                 bool fastMode, bool positionOnlyMode, IkSolveStats* stats, std::string* statusText) {
+        if (scene == nullptr) {
+            if (statusText) {
+                *statusText = "IK失败：场景为空";
+            }
+            return false;
+        }
+        if (targetWorldByChain.size() != chains_.size()) {
+            if (statusText) {
+                *statusText = "IK失败：目标数量与链数量不匹配";
+            }
+            return false;
+        }
+        if (!fullBodyReady_) {
+            if (statusText) {
+                *statusText = "IK失败：flex_ik未就绪" + (fullBodyError_.empty() ? std::string() : (" (" + fullBodyError_ + ")"));
+            }
+            return false;
+        }
+
+        int readyCount = 0;
+        for (int i = 0; i < chainCount(); ++i) {
+            if (chains_[i].status.ready) {
+                ++readyCount;
+            }
+        }
+        if (readyCount <= 0) {
+            if (statusText) {
+                *statusText = "IK失败：无可用链";
+            }
+            return false;
+        }
+
+        int solvedCount                = 0;
+        bool activeSolved              = false;
+        float maxErrorMm               = 0.0f;
+        bool success                   = false;
+        bool usedFallback              = false;
+        const flex_ik::Vector qCurrent = buildFullBodyQFromScene(*scene);
+
+        if (fullBodyBackend_ == "wbc_chain_ik") {
+            if (!fullBodyWbcReady_ || fullBodyWbcSolverPose_ == nullptr || fullBodyWbcSolverPosOnly_ == nullptr) {
+                if (statusText) {
+                    *statusText = "IK失败：wbc_chain_ik未就绪" + (fullBodyError_.empty() ? std::string() : (" (" + fullBodyError_ + ")"));
+                }
+                return false;
+            }
+            Wbc::robot::ChainIkTrait* wbcSolver = positionOnlyMode ? fullBodyWbcSolverPosOnly_.get() : fullBodyWbcSolverPose_.get();
+            wbcSolver->setMaxIters(fastMode ? std::max(12, iterations * 6) : std::max(50, iterations * 25));
+            wbcSolver->setTolerance(fastMode ? 3e-4 : 1e-4);
+
+            for (int i = 0; i < chainCount(); ++i) {
+                if (!chains_[i].status.ready) {
+                    continue;
+                }
+                try {
+                    wbcSolver->setTaskReference(chains_[i].status.config.tip_link,
+                                                glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
+                    const double taskWeight = (i == activeChainIndex) ? (fastMode ? 2.0 : 2.6) : 1.0;
+                    wbcSolver->setTaskWeight(chains_[i].status.config.tip_link, taskWeight);
+                } catch (const std::exception& ex) {
+                    if (statusText) {
+                        *statusText = std::string("IK失败：wbc_chain_ik更新目标失败: ") + ex.what();
+                    }
+                    return false;
+                }
+            }
+
+            Wbc::robot::IkResult wbcResult = wbcSolver->solveIK(qCurrent, false);
+            if (!wbcResult.success && !fastMode) {
+                Wbc::robot::ChainIkTrait* fallbackSolver = fullBodyWbcSolverPosOnly_.get();
+                fallbackSolver->setMaxIters(std::max(50, iterations * 25));
+                fallbackSolver->setTolerance(2e-4);
+                for (int i = 0; i < chainCount(); ++i) {
+                    if (!chains_[i].status.ready) {
+                        continue;
+                    }
+                    fallbackSolver->setTaskReference(chains_[i].status.config.tip_link,
+                                                     glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
+                    const double taskWeight = (i == activeChainIndex) ? 2.0 : 1.0;
+                    fallbackSolver->setTaskWeight(chains_[i].status.config.tip_link, taskWeight);
+                }
+                wbcResult    = fallbackSolver->solveIK(qCurrent, false);
+                usedFallback = true;
+            }
+
+            if (wbcResult.solution.size() == 0) {
+                if (statusText) {
+                    *statusText = "IK失败：wbc_chain_ik未返回解";
+                }
+                return false;
+            }
+
+            applyFullBodyQToScene(scene, limitFullBodyStep(qCurrent, wbcResult.solution, fastMode));
+            success = wbcResult.success;
+        } else {
+            if (!fullBodyFlexReady_ || fullBodySolverPose_ == nullptr || fullBodySolverPosOnly_ == nullptr) {
+                if (statusText) {
+                    *statusText = "IK失败：flex_ik未就绪" + (fullBodyError_.empty() ? std::string() : (" (" + fullBodyError_ + ")"));
+                }
+                return false;
+            }
+            flex_ik::FlexIk* solver = positionOnlyMode ? fullBodySolverPosOnly_.get() : fullBodySolverPose_.get();
+            auto params             = solver->iterativeParams();
+            params.max_iterations   = fastMode ? std::max(6, iterations * (positionOnlyMode ? 4 : 8)) : std::max(20, iterations * 15);
+            params.error_tolerance  = fastMode ? (positionOnlyMode ? 6e-3 : 3e-3) : 1e-3;
+            params.dq_gain          = fastMode ? 0.8 : 1.0;
+            params.orientation_gain = positionOnlyMode ? 1.0 : (fastMode ? 0.6 : 1.0);
+            solver->setIterativeParams(params);
+
+            for (int i = 0; i < chainCount(); ++i) {
+                if (!chains_[i].status.ready) {
+                    continue;
+                }
+                try {
+                    solver->updateTaskTarget(chains_[i].status.config.tip_link, glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
+                } catch (const std::exception& ex) {
+                    if (statusText) {
+                        *statusText = std::string("IK失败：flex_ik更新目标失败: ") + ex.what();
+                    }
+                    return false;
+                }
+            }
+
+            flex_ik::Vector q0               = qCurrent;
+            flex_ik::FlexIk::IkResult result = solver->solve(q0);
+            if (!result.success && !fastMode) {
+                auto fallbackParams             = fullBodySolverPosOnly_->iterativeParams();
+                fallbackParams.max_iterations   = std::max(20, iterations * 15);
+                fallbackParams.error_tolerance  = 2e-3;
+                fallbackParams.dq_gain          = 1.0;
+                fallbackParams.orientation_gain = 1.0;
+                fullBodySolverPosOnly_->setIterativeParams(fallbackParams);
+                for (int i = 0; i < chainCount(); ++i) {
+                    if (!chains_[i].status.ready) {
+                        continue;
+                    }
+                    fullBodySolverPosOnly_->updateTaskTarget(chains_[i].status.config.tip_link,
+                                                             glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
+                }
+                result       = fullBodySolverPosOnly_->solve(q0);
+                usedFallback = true;
+            }
+
+            if (result.solution.size() == 0) {
+                if (statusText) {
+                    *statusText = "IK失败：flex_ik未返回解";
+                }
+                return false;
+            }
+            applyFullBodyQToScene(scene, limitFullBodyStep(qCurrent, result.solution, fastMode));
+            success = result.success;
+        }
+
+        const float successPosErrMm = fastMode ? 45.0f : 25.0f;
+
+        for (int i = 0; i < chainCount(); ++i) {
+            if (!chains_[i].status.ready) {
+                continue;
+            }
+            glm::vec3 tipPos(0.0f);
+            glm::vec3 tipRpy(0.0f);
+            if (!fetchTipWorldPose(*scene, i, &tipPos, &tipRpy)) {
+                continue;
+            }
+            const glm::vec3 targetPos = glm::vec3(targetWorldByChain[static_cast<size_t>(i)][3]);
+            const float posErrMm      = glm::length(tipPos - targetPos) * 1000.0f;
+            maxErrorMm                = std::max(maxErrorMm, posErrMm);
+            if (posErrMm <= successPosErrMm) {
+                ++solvedCount;
+                if (i == activeChainIndex) {
+                    activeSolved = true;
+                }
+            }
+        }
+
+        if (activeChainIndex >= 0 && activeChainIndex < chainCount()) {
+            success = success || activeSolved;
+        }
+
+        if (stats != nullptr) {
+            stats->success               = success;
+            stats->solved_chain_count    = solvedCount;
+            stats->ready_chain_count     = std::max(readyCount, 0);
+            stats->active_chain_solved   = activeSolved;
+            stats->max_position_error_mm = maxErrorMm;
+        }
+
+        if (statusText) {
+            std::ostringstream oss;
+            const std::string solverLabel = (fullBodyBackend_ == "wbc_chain_ik") ? "WBC-ChainIK" : "FlexIK-QP";
+            if (success) {
+                oss << "全身IK成功(" << solverLabel << "): 活动链=" << (activeSolved ? "ok" : "fail") << ", 总体 " << solvedCount << "/"
+                    << std::max(readyCount, 0) << " 链接近目标";
+                if (maxErrorMm > 0.0f) {
+                    oss << "，最大误差 " << maxErrorMm << " mm";
+                }
+                if (usedFallback) {
+                    oss << "（fallback: position-only）";
+                }
+            } else {
+                oss << "全身IK失败(" << solverLabel << "): 活动链未到位, 总体 " << solvedCount << "/" << std::max(readyCount, 0)
+                    << " 链接近目标";
+                if (usedFallback) {
+                    oss << "（position-only仍失败）";
+                }
+            }
+            *statusText = oss.str();
+        }
+        return success;
+    }
+
+}  // namespace omnilink::teleop_viewer

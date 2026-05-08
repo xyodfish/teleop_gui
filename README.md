@@ -148,6 +148,9 @@ cd teleop_gui_release
 - `ui.fix_base_like_mujoco`：固定底座显示
 - `ui.only_show_master_arm_groups`：仅显示主臂关节组
 - `ui.cjk_font_path` / `ui.cjk_font_size`：中文字体
+- `ik.mode`：IK 求解模式，`single_chain`（单链）或 `full_body`（全身多链约束）
+- `ik.full_body_iterations`：`full_body` 下每次求解的迭代轮次
+- `ik.chains`：IK 链配置列表（`label/base_link/tip_link`）
 - `omnilink_bridge.enable`：是否启用桥接控制
 - `omnilink_bridge.rc_virtual_joy_topic`：RC 控制下发 topic
 - `omnilink_bridge.wbc_info_topic` / `error_topic`：WBC 与错误通道
@@ -167,3 +170,70 @@ cd teleop_gui_release
 ## 9. 相关文档 📚
 
 - 操作手册：`docs/USER_GUIDE_zh.md`
+
+## 10. RViz Interactive Marker（推荐做IK拖动）🕹️
+
+如果你觉得 `robot_kinematic_viewer` 内置拖动手感不好，可以直接用 RViz 的 Interactive Marker 做 6DoF 拖动，再把目标位姿发布给 IK。
+
+脚本位置：
+
+- `scripts/rviz_ik_interactive_marker.py`
+
+### 10.1 依赖
+
+- ROS1 Noetic
+- `interactive_markers`
+- `rviz`
+
+示例安装：
+
+```bash
+sudo apt install ros-noetic-interactive-markers ros-noetic-rviz
+```
+
+### 10.2 启动脚本
+
+一键启动整套（`roscore + static tf + marker + rviz + robot_kinematic_viewer`）：
+
+```bash
+cd /home/yuxia/Workspace/SingoriX/OmniLink/teleop_gui
+./scripts/start_rviz_ik_stack.sh
+```
+
+只启动 ROS+marker（不拉起 RViz 和 viewer）：
+
+```bash
+./scripts/start_rviz_ik_stack.sh --no-rviz --no-viewer
+```
+
+旧的手动方式：
+
+```bash
+source /opt/ros/noetic/setup.bash
+rosrun <your_ros_pkg> rviz_ik_interactive_marker.py
+```
+
+若你不是按 ROS package 方式安装，可直接运行：
+
+```bash
+source /opt/ros/noetic/setup.bash
+python3 ./scripts/rviz_ik_interactive_marker.py
+```
+
+默认发布目标位姿：
+
+- Topic: `/teleop_gui/ik_target_pose`
+- Type: `geometry_msgs/PoseStamped`
+- Frame: `world`（可通过参数改）
+
+### 10.3 RViz 配置
+
+1. `Fixed Frame` 设为与脚本 `~frame_id` 相同（默认 `world`）。
+2. 添加 `InteractiveMarkers` 显示，Topic 设为 `/teleop_gui_ik_marker/update`。
+3. 拖动 marker 的轴/圆环即可输出实时位姿。
+
+### 10.4 常用参数
+
+```bash
+rosrun <your_ros_pkg> rviz_ik_interactive_marker.py _frame_id:=torso_base_link _publish_topic:=/ik_target_pose _marker_scale:=0.35 _publish_rate_hz:=60
+```

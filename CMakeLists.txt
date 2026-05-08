@@ -70,6 +70,42 @@ find_package(Boost REQUIRED COMPONENTS thread)
 find_package(OpenGL REQUIRED)
 find_package(ASSIMP REQUIRED)
 find_package(GLEW REQUIRED)
+find_package(tinyxml2 QUIET)
+find_package(qpOASES QUIET)
+
+set(FLEX_IK_ROOT "$ENV{HOME}/Workspace/flex_ik" CACHE PATH "flex_ik repository root")
+find_path(FLEX_IK_INCLUDE_DIR NAMES flex_ik.h PATHS ${FLEX_IK_ROOT}/include)
+find_library(FLEX_IK_LIBRARY NAMES flex_ik PATHS ${FLEX_IK_ROOT}/build/lib ${FLEX_IK_ROOT}/lib)
+if (NOT FLEX_IK_INCLUDE_DIR OR NOT FLEX_IK_LIBRARY)
+    message(FATAL_ERROR "flex_ik not found. Please set FLEX_IK_ROOT to your flex_ik repo path.")
+endif()
+
+set(WHOLE_BODY_CONTROL_ROOT "$ENV{HOME}/Workspace/SingoriX/Experimental/whole_body_control" CACHE PATH "whole_body_control repository root")
+find_path(WHOLE_BODY_CONTROL_INCLUDE_DIR NAMES wbc/robot/traits/chain_ik.h PATHS ${WHOLE_BODY_CONTROL_ROOT}/include)
+find_library(WHOLE_BODY_CONTROL_LIBRARY NAMES whole_body_control
+             PATHS ${WHOLE_BODY_CONTROL_ROOT}/build-x86_64-Linux-GNU-9.4.0 ${WHOLE_BODY_CONTROL_ROOT}/build/lib ${WHOLE_BODY_CONTROL_ROOT}/lib)
+if (NOT WHOLE_BODY_CONTROL_INCLUDE_DIR OR NOT WHOLE_BODY_CONTROL_LIBRARY)
+    message(FATAL_ERROR "whole_body_control not found. Please set WHOLE_BODY_CONTROL_ROOT correctly.")
+endif()
+
+if (NOT qpOASES_FOUND)
+    find_library(QPOASES_LIBRARY NAMES qpOASES
+                 PATHS /opt/galbot/devel_control/${ARCH_FREFIX}/lib
+                       /opt/galbot/devel_control/${ARCH_PREFIX}/lib
+                       /opt/galbot/devel_control/x86_64-Linux-GNU-9.4.0/lib)
+endif()
+
+# Some trac_ik exports expect tinyxml2::tinyxml2; define a compatible target when missing.
+if (TARGET TinyXML2::TinyXML2 AND NOT TARGET tinyxml2::tinyxml2)
+    add_library(tinyxml2::tinyxml2 ALIAS TinyXML2::TinyXML2)
+endif()
+if (NOT TARGET tinyxml2::tinyxml2)
+    find_library(TINYXML2_LIBRARY NAMES tinyxml2)
+    if (TINYXML2_LIBRARY)
+        add_library(tinyxml2::tinyxml2 UNKNOWN IMPORTED)
+        set_target_properties(tinyxml2::tinyxml2 PROPERTIES IMPORTED_LOCATION "${TINYXML2_LIBRARY}")
+    endif()
+endif()
 
 
 get_target_property(glog_INCLUDE_DIRS glog::glog INTERFACE_INCLUDE_DIRECTORIES)
@@ -100,11 +136,14 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/deps/imgui
     ${PROJECT_SOURCE_DIR}/3rd/include
     ${INC_DIR}
+    /opt/ros/noetic/include
     ${singorix_proto_INCLUDE_DIRS}
     ${glog_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIRS}
     ${EMBOSA_INCLUDE_DIR}
     ${trac_ik_INCLUDE_DIR}
+    ${FLEX_IK_INCLUDE_DIR}
+    ${WHOLE_BODY_CONTROL_INCLUDE_DIR}
 )
 
 link_directories(
@@ -151,6 +190,7 @@ add_executable(robot_viewer
 add_executable(robot_kinematic_viewer
     src/robot_kinematic_viewer.cpp
     src/teleop_viewer/config.cpp
+    src/teleop_viewer/ik_solver.cpp
     src/teleop_viewer/scene.cpp
     deps/glad/glad.c
 )
@@ -181,12 +221,22 @@ target_link_libraries(robot_kinematic_viewer
     urdfdom_world
     urdfdom_sensor
     ${trac_ik_LIBRARIES}
+    ${FLEX_IK_LIBRARY}
+    ${WHOLE_BODY_CONTROL_LIBRARY}
     OpenGL::GL
     glfw
     GLEW::GLEW
     pthread
     yaml-cpp
 )
+
+if (qpOASES_FOUND)
+    target_link_libraries(robot_kinematic_viewer ${qpOASES_LIBRARIES})
+elseif (QPOASES_LIBRARY)
+    target_link_libraries(robot_kinematic_viewer ${QPOASES_LIBRARY})
+else()
+    message(WARNING "qpOASES not explicitly linked; full-body IK backends may fail to link/runtime.")
+endif()
 
 
 # 最后，将上面创建的库链接到你的主程序目标（在src/CMakeLists.txt中定义）

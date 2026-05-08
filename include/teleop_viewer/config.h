@@ -85,6 +85,22 @@ struct UiConfig {
     float cjk_font_size = 18.0f;
 };
 
+struct ViewerIkChainConfig {
+    std::string label = "";
+    std::string base_link = "";
+    std::string tip_link = "";
+};
+
+struct ViewerIkConfig {
+    std::string mode = "single_chain";  // single_chain | full_body
+    std::string full_body_backend = "flex_ik";  // flex_ik | wbc_chain_ik
+    int full_body_iterations = 3;
+    std::vector<ViewerIkChainConfig> chains = {
+        {"右臂", "torso_base_link", "right_arm_end_effector_mount_link"},
+        {"左臂", "torso_base_link", "left_arm_end_effector_mount_link"},
+    };
+};
+
 struct ViewerConfig {
     WindowConfig window;
     RobotConfig robot;
@@ -93,6 +109,7 @@ struct ViewerConfig {
     OmnilinkBridgeConfig omnilink_bridge;
     CameraConfig camera;
     UiConfig ui;
+    ViewerIkConfig ik;
 
     static ViewerConfig LoadFromFile(const std::string& yaml_path, bool* loaded_ok = nullptr);
 };
