@@ -1,5 +1,5 @@
 #include "teleop_viewer/app.h"
-#include "teleop_viewer/config.h"
+#include "teleop_viewer/robot_viewer_config.h"
 
 #include <iostream>
 #include <string>
@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
     }
 
     bool loaded_ok = false;
-    auto config = omnilink::teleop_viewer::ViewerConfig::LoadFromFile(config_path, &loaded_ok);
+    auto config = omnilink::teleop_viewer::RobotViewerConfig::LoadFromFile(config_path, &loaded_ok);
 
     if (loaded_ok) {
         std::cout << "[robot_viewer] Config loaded: " << config_path << std::endl;

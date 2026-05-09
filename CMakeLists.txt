@@ -196,7 +196,7 @@ add_executable(robot_viewer
 
 add_executable(robot_kinematic_viewer
     src/robot_kinematic_viewer.cpp
-    src/teleop_viewer/config.cpp
+    src/teleop_viewer/kinematic_viewer_config.cpp
     src/teleop_viewer/ik_solver.cpp
     src/teleop_viewer/scene.cpp
     deps/glad/glad.c

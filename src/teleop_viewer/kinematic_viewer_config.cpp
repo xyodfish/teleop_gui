@@ -1,8 +1,12 @@
-#include "teleop_viewer/robot_viewer_config.h"
+#include "teleop_viewer/kinematic_viewer_config.h"
 
 #include <yaml-cpp/yaml.h>
 
 #include <iostream>
+#include <sstream>
+#include <stdexcept>
+#include <unordered_set>
+#include <utility>
 
 namespace omnilink::teleop_viewer {
 namespace {
@@ -21,18 +25,6 @@ void ReadVec3(const YAML::Node& node, const char* key, glm::vec3& out) {
     out.x = node[key][0].as<float>();
     out.y = node[key][1].as<float>();
     out.z = node[key][2].as<float>();
-}
-
-void ReadStringList(const YAML::Node& node, const char* key, std::vector<std::string>& out) {
-    if (!node || !node[key] || !node[key].IsSequence()) {
-        return;
-    }
-    out.clear();
-    for (const auto& item : node[key]) {
-        if (item.IsScalar()) {
-            out.push_back(item.as<std::string>());
-        }
-    }
 }
 
 void ReadStringListFromItem(const YAML::Node& item, const char* key, std::vector<std::string>& out) {
@@ -73,14 +65,53 @@ void ReadIkChainList(const YAML::Node& node, const char* key, std::vector<Viewer
     }
 }
 
+void ValidateTopLevelKeys(const YAML::Node& root) {
+    if (!root || !root.IsMap()) {
+        throw std::runtime_error("YAML 根节点必须是 map");
+    }
+
+    static const std::unordered_set<std::string> kAllowedKeys = {
+        "window",
+        "robot",
+        "camera",
+        "ui",
+        "ik",
+    };
+
+    std::vector<std::string> unknown;
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        if (!it->first.IsScalar()) {
+            continue;
+        }
+        const std::string key = it->first.as<std::string>();
+        if (kAllowedKeys.find(key) == kAllowedKeys.end()) {
+            unknown.push_back(key);
+        }
+    }
+
+    if (!unknown.empty()) {
+        std::ostringstream oss;
+        oss << "检测到非 robot_kinematic_viewer 配置项: ";
+        for (size_t i = 0; i < unknown.size(); ++i) {
+            if (i > 0) {
+                oss << ", ";
+            }
+            oss << unknown[i];
+        }
+        oss << "。请使用独立的 robot_kinematic_viewer 配置文件。";
+        throw std::runtime_error(oss.str());
+    }
+}
+
 }  // namespace
 
-RobotViewerConfig RobotViewerConfig::LoadFromFile(const std::string& yaml_path, bool* loaded_ok) {
-    RobotViewerConfig cfg;
+KinematicViewerConfig KinematicViewerConfig::LoadFromFile(const std::string& yaml_path, bool* loaded_ok) {
+    KinematicViewerConfig cfg;
     bool ok = false;
 
     try {
         YAML::Node root = YAML::LoadFile(yaml_path);
+        ValidateTopLevelKeys(root);
 
         ReadScalar(root["window"], "width", cfg.window.width);
         ReadScalar(root["window"], "height", cfg.window.height);
@@ -88,22 +119,6 @@ RobotViewerConfig RobotViewerConfig::LoadFromFile(const std::string& yaml_path, 
 
         ReadScalar(root["robot"], "urdf_path", cfg.robot.urdf_path);
         ReadScalar(root["robot"], "mujoco_xml_path", cfg.robot.mujoco_xml_path);
-
-        ReadScalar(root["sensor"], "topic", cfg.sensor.topic);
-        ReadScalar(root["sensor"], "node_name", cfg.sensor.node_name);
-        ReadScalar(root["joy"], "topic", cfg.joy.topic);
-        ReadScalar(root["omnilink_bridge"], "enable", cfg.omnilink_bridge.enable);
-        ReadScalar(root["omnilink_bridge"], "rc_virtual_joy_topic", cfg.omnilink_bridge.rc_virtual_joy_topic);
-        ReadScalar(root["omnilink_bridge"], "state_topic", cfg.omnilink_bridge.state_topic);
-        ReadScalar(root["omnilink_bridge"], "wbc_info_topic", cfg.omnilink_bridge.wbc_info_topic);
-        ReadScalar(root["omnilink_bridge"], "error_topic", cfg.omnilink_bridge.error_topic);
-        ReadScalar(root["omnilink_bridge"], "enable_wbc_monitor", cfg.omnilink_bridge.enable_wbc_monitor);
-        ReadScalar(root["omnilink_bridge"], "enable_error_monitor", cfg.omnilink_bridge.enable_error_monitor);
-        ReadScalar(root["omnilink_bridge"], "auto_lock_on_critical_fault", cfg.omnilink_bridge.auto_lock_on_critical_fault);
-        ReadStringList(root["omnilink_bridge"], "rc_button_names", cfg.omnilink_bridge.rc_button_names);
-        ReadScalar(root["omnilink_bridge"], "command_repeat_interval_sec", cfg.omnilink_bridge.command_repeat_interval_sec);
-        ReadScalar(root["omnilink_bridge"], "wbc_norm_warn", cfg.omnilink_bridge.wbc_norm_warn);
-        ReadScalar(root["omnilink_bridge"], "wbc_norm_danger", cfg.omnilink_bridge.wbc_norm_danger);
 
         ReadScalar(root["camera"], "distance", cfg.camera.distance);
         ReadScalar(root["camera"], "yaw", cfg.camera.yaw);
@@ -116,21 +131,7 @@ RobotViewerConfig RobotViewerConfig::LoadFromFile(const std::string& yaml_path, 
         ReadScalar(root["camera"], "min_distance", cfg.camera.min_distance);
         ReadScalar(root["camera"], "max_distance", cfg.camera.max_distance);
 
-        ReadScalar(root["ui"], "only_show_master_arm_groups", cfg.ui.only_show_master_arm_groups);
         ReadScalar(root["ui"], "fix_base_like_mujoco", cfg.ui.fix_base_like_mujoco);
-        ReadScalar(root["ui"], "sidebar_collapsed_default", cfg.ui.sidebar_collapsed_default);
-        ReadScalar(root["ui"], "side_panel_width", cfg.ui.side_panel_width);
-        ReadScalar(root["ui"], "collapsed_sidebar_width", cfg.ui.collapsed_sidebar_width);
-        ReadScalar(root["ui"], "sidebar_width_drag_speed", cfg.ui.sidebar_width_drag_speed);
-        ReadScalar(root["ui"], "stale_timeout_seconds", cfg.ui.stale_timeout_seconds);
-        ReadScalar(root["ui"], "out_of_range_margin", cfg.ui.out_of_range_margin);
-        ReadScalar(root["ui"], "waveform_history_size", cfg.ui.waveform_history_size);
-        ReadScalar(root["ui"], "waveform_plot_height", cfg.ui.waveform_plot_height);
-        ReadScalar(root["ui"], "alarm_trigger_frames", cfg.ui.alarm_trigger_frames);
-        ReadScalar(root["ui"], "alarm_show_only_active_default", cfg.ui.alarm_show_only_active_default);
-        ReadScalar(root["ui"], "baseline_warn_delta_deg", cfg.ui.baseline_warn_delta_deg);
-        ReadScalar(root["ui"], "record_output_dir", cfg.ui.record_output_dir);
-        ReadScalar(root["ui"], "auto_start_recording", cfg.ui.auto_start_recording);
         ReadScalar(root["ui"], "cjk_font_path", cfg.ui.cjk_font_path);
         ReadScalar(root["ui"], "cjk_font_size", cfg.ui.cjk_font_size);
 
@@ -141,7 +142,7 @@ RobotViewerConfig RobotViewerConfig::LoadFromFile(const std::string& yaml_path, 
 
         ok = true;
     } catch (const std::exception& e) {
-        std::cerr << "[RobotViewerConfig] Load failed for: " << yaml_path << ", reason: " << e.what()
+        std::cerr << "[KinematicViewerConfig] Load failed for: " << yaml_path << ", reason: " << e.what()
                   << ". Fallback to defaults." << std::endl;
     }
 

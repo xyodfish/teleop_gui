@@ -21,6 +21,7 @@
 - `src/teleop_viewer/`：主应用核心（App、侧栏、场景、订阅发布、配置）
 - `include/teleop_viewer/`：对应头文件
 - `config/robot_viewer.yaml`：运行配置
+- `config/robot_kinematic_viewer.yaml`：`robot_kinematic_viewer` 运行配置
 - `docs/USER_GUIDE_zh.md`：面向操作人员的使用手册
 - `build.sh` / `all_rebuild.sh`：开发构建脚本
 - `auto_build.sh`：一键构建+打包+（可选）自检

@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "teleop_viewer/config.h"
+#include "teleop_viewer/robot_viewer_config.h"
 #include "teleop_viewer/scene.h"
 #include "teleop_viewer/sensor_subscriber.h"
 
@@ -17,7 +17,7 @@ namespace omnilink::teleop_viewer {
 
 class RobotViewerApp {
    public:
-    explicit RobotViewerApp(ViewerConfig config);
+    explicit RobotViewerApp(RobotViewerConfig config);
     ~RobotViewerApp();
 
     int run();
@@ -120,7 +120,7 @@ class RobotViewerApp {
     bool publishRcVirtualJoyCommand(const std::string& source, const std::string& note = "");
     void pushRcCommandLog(double now_sec, const std::string& source, bool ok, int active_locks, const std::string& note);
 
-    ViewerConfig config_;
+    RobotViewerConfig config_;
 
     GLFWwindow* window_ = nullptr;
     unsigned int shader_ = 0;

@@ -1,0 +1,42 @@
+window:
+  width: 1280
+  height: 720
+  title: "机器人运动学调试界面 - Unitree G1"
+
+robot:
+  urdf_path: "/data/open_src_code/GMR_custom/assets/unitree_g1/g1_custom_collision_29dof.urdf"
+  mujoco_xml_path: "/data/open_src_code/GMR_custom/assets/unitree_g1/g1_mocap_29dof.xml"
+
+camera:
+  distance: 3.0
+  yaw: 0.0
+  pitch: 0.0
+  target: [0.0, 0.0, 0.0]
+
+  rotate_speed: 0.005
+  zoom_scale: 0.1
+  dolly_scale: 0.02
+  pan_scale: 0.0015
+  min_distance: 0.2
+  max_distance: 20.0
+
+ui:
+  fix_base_like_mujoco: true
+  cjk_font_path: ""
+  cjk_font_size: 18.0
+
+ik:
+  mode: "full_body" # single_chain | full_body
+  full_body_backend: "wbc_chain_ik" # flex_ik | wbc_chain_ik
+  full_body_iterations: 6
+  chains:
+    - label: "右臂"
+      base_link: "torso_link"
+      tip_link: "right_rubber_hand"
+      base_link_candidates: ["torso_link", "waist_roll_link", "pelvis"]
+      tip_link_candidates: ["right_rubber_hand", "right_wrist_yaw_link", "right_wrist_pitch_link"]
+    - label: "左臂"
+      base_link: "torso_link"
+      tip_link: "left_rubber_hand"
+      base_link_candidates: ["torso_link", "waist_roll_link", "pelvis"]
+      tip_link_candidates: ["left_rubber_hand", "left_wrist_yaw_link", "left_wrist_pitch_link"]

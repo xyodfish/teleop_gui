@@ -391,7 +391,7 @@ void DrawWaveformWithAxes(const char* id, const std::vector<float>& values, floa
 
 }  // namespace
 
-RobotViewerApp::RobotViewerApp(ViewerConfig config) : config_(std::move(config)) {
+RobotViewerApp::RobotViewerApp(RobotViewerConfig config) : config_(std::move(config)) {
     camera_.distance = config_.camera.distance;
     camera_.yaw      = config_.camera.yaw;
     camera_.pitch    = config_.camera.pitch;

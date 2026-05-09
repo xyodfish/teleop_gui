@@ -1,4 +1,4 @@
-#include "teleop_viewer/config.h"
+#include "teleop_viewer/kinematic_viewer_config.h"
 #include "teleop_viewer/ik_solver.h"
 #include "teleop_viewer/scene.h"
 
@@ -32,7 +32,7 @@ using omnilink::teleop_viewer::IkSolver;
 using omnilink::teleop_viewer::IkSolveStats;
 using omnilink::teleop_viewer::OrbitCamera;
 using omnilink::teleop_viewer::RobotScene;
-using omnilink::teleop_viewer::ViewerConfig;
+using omnilink::teleop_viewer::KinematicViewerConfig;
 
 namespace {
 
@@ -198,6 +198,7 @@ void main() {
         char tf_filter[128]        = {0};
         int selected_joint         = -1;
         std::unordered_map<std::string, float> pose_snapshot;
+        int sidebar_page = 3;  // 0:场景 1:IK 2:回放 3:关节 4:TF
     };
 
     struct IkState {
@@ -248,6 +249,8 @@ void main() {
         float rotate_snap_step_deg        = 5.0f;
         bool refine_single_chain_on_drag_end = true;
         bool refine_only_when_rotation       = false;
+        float translate_channel_gain[3]      = {1.0f, 1.0f, 1.0f};  // x/y/z
+        float rotate_channel_gain[3]         = {1.0f, 1.0f, 1.0f};   // roll/pitch/yaw
 
         // External RViz interactive marker input (PoseStamped).
         bool use_external_target           = true;
@@ -283,7 +286,7 @@ void main() {
 
     std::string getUrdfPathFromArgs(int argc, char** argv) {
         if (argc <= 1) {
-            return "config/robot_viewer.yaml";
+            return "config/robot_kinematic_viewer.yaml";
         }
         return argv[1];
     }
@@ -293,7 +296,7 @@ void main() {
         return std::filesystem::exists(path, ec);
     }
 
-    void setupFonts(const ViewerConfig& cfg) {
+    void setupFonts(const KinematicViewerConfig& cfg) {
         ImGuiIO& io           = ImGui::GetIO();
         float font_size       = std::max(12.0f, cfg.ui.cjk_font_size);
         const ImWchar* ranges = io.Fonts->GetGlyphRangesChineseFull();
@@ -335,6 +338,14 @@ void main() {
         m           = m * glm::rotate(glm::mat4(1.0f), glm::radians(rpyDeg[1]), glm::vec3(0.0f, 1.0f, 0.0f));
         m           = m * glm::rotate(glm::mat4(1.0f), glm::radians(rpyDeg[2]), glm::vec3(0.0f, 0.0f, 1.0f));
         return m;
+    }
+
+    float wrapDeltaDeg(float delta_deg) {
+        float wrapped = std::fmod(delta_deg + 180.0f, 360.0f);
+        if (wrapped < 0.0f) {
+            wrapped += 360.0f;
+        }
+        return wrapped - 180.0f;
     }
 
     void appendMarkerAxes(std::vector<LineVertex>* out, const glm::vec3& pos, const glm::vec3& rpy_deg, float axis_len, bool selected) {
@@ -409,10 +420,19 @@ int main(int argc, char** argv) {
     }
 
     std::string config_or_urdf = getUrdfPathFromArgs(argc, argv);
-    ViewerConfig cfg           = ViewerConfig::LoadFromFile(config_or_urdf);
-    std::string urdf_path      = cfg.robot.urdf_path;
-    if (config_or_urdf.size() > 5 && config_or_urdf.substr(config_or_urdf.size() - 5) == ".urdf") {
+    const bool is_urdf_input   = config_or_urdf.size() > 5 && config_or_urdf.substr(config_or_urdf.size() - 5) == ".urdf";
+    KinematicViewerConfig cfg;
+    std::string urdf_path = cfg.robot.urdf_path;
+    if (is_urdf_input) {
         urdf_path = config_or_urdf;
+    } else {
+        bool loaded_ok = false;
+        cfg            = KinematicViewerConfig::LoadFromFile(config_or_urdf, &loaded_ok);
+        if (!loaded_ok) {
+            std::cerr << "[robot_kinematic_viewer] 配置加载失败，请使用独立配置文件: " << config_or_urdf << std::endl;
+            return 1;
+        }
+        urdf_path = cfg.robot.urdf_path;
     }
 
     if (!glfwInit()) {
@@ -917,7 +937,8 @@ int main(int argc, char** argv) {
 
             const glm::vec3 marker_pos(ik_state.marker_pos[0], ik_state.marker_pos[1], ik_state.marker_pos[2]);
             const glm::vec3 marker_rpy_deg(ik_state.marker_rpy_deg[0], ik_state.marker_rpy_deg[1], ik_state.marker_rpy_deg[2]);
-            glm::mat4 gizmo_world  = markerWorldMatrix(marker_pos, marker_rpy_deg);
+            const glm::mat4 marker_world_before = markerWorldMatrix(marker_pos, marker_rpy_deg);
+            glm::mat4 gizmo_world               = marker_world_before;
             ImGuizmo::OPERATION op = static_cast<ImGuizmo::OPERATION>(ImGuizmo::TRANSLATE | ImGuizmo::ROTATE);
             if (ik_state.gizmo_operation == 0)
                 op = ImGuizmo::TRANSLATE;
@@ -945,26 +966,46 @@ int main(int argc, char** argv) {
             bool gizmo_using = ImGuizmo::IsUsing();
             bool gizmo_over  = ImGuizmo::IsOver();
             bool current_drag_position_only = (op == ImGuizmo::TRANSLATE);
-            if (ik_state.gizmo_operation == 2) {
-                const glm::vec3 deltaTranslation(gizmo_delta[3]);
-                const glm::quat deltaRotation = glm::quat_cast(gizmo_delta);
-                const float rotationAmount    = glm::abs(glm::angle(deltaRotation));
-                current_drag_position_only    = glm::length(deltaTranslation) > 1e-6f && rotationAmount < glm::radians(0.25f);
-            }
             if (manipulated || gizmo_using) {
                 ik_state.dragging_marker          = true;
                 ik_state.gizmo_drag_interacted    = true;
+
+                const glm::vec3 raw_pos = glm::vec3(gizmo_world[3]);
+                const glm::quat raw_q   = glm::quat_cast(gizmo_world);
+                const glm::vec3 raw_rpy_deg(glm::degrees(glm::eulerAngles(raw_q)));
+
+                const glm::vec3 delta_pos = raw_pos - marker_pos;
+                glm::vec3 scaled_delta_pos(delta_pos.x * ik_state.translate_channel_gain[0],
+                                           delta_pos.y * ik_state.translate_channel_gain[1],
+                                           delta_pos.z * ik_state.translate_channel_gain[2]);
+
+                const glm::vec3 raw_delta_rpy_deg(wrapDeltaDeg(raw_rpy_deg.x - marker_rpy_deg.x),
+                                                  wrapDeltaDeg(raw_rpy_deg.y - marker_rpy_deg.y),
+                                                  wrapDeltaDeg(raw_rpy_deg.z - marker_rpy_deg.z));
+                glm::vec3 scaled_delta_rpy_deg(raw_delta_rpy_deg.x * ik_state.rotate_channel_gain[0],
+                                               raw_delta_rpy_deg.y * ik_state.rotate_channel_gain[1],
+                                               raw_delta_rpy_deg.z * ik_state.rotate_channel_gain[2]);
+
+                const glm::vec3 updated_pos = marker_pos + scaled_delta_pos;
+                const glm::vec3 updated_rpy_deg(marker_rpy_deg.x + scaled_delta_rpy_deg.x, marker_rpy_deg.y + scaled_delta_rpy_deg.y,
+                                                marker_rpy_deg.z + scaled_delta_rpy_deg.z);
+
+                current_drag_position_only = glm::length(scaled_delta_pos) > 1e-6f &&
+                                             glm::length(glm::radians(scaled_delta_rpy_deg)) < glm::radians(0.25f);
+                if (op == ImGuizmo::TRANSLATE) {
+                    current_drag_position_only = true;
+                } else if (op == ImGuizmo::ROTATE) {
+                    current_drag_position_only = false;
+                }
                 ik_state.gizmo_drag_position_only = current_drag_position_only;
-                glm::vec3 p                       = glm::vec3(gizmo_world[3]);
-                glm::quat q                       = glm::quat_cast(gizmo_world);
-                glm::vec3 rpy                     = glm::eulerAngles(q);
-                ik_state.marker_pos[0]            = p.x;
-                ik_state.marker_pos[1]            = p.y;
-                ik_state.marker_pos[2]            = p.z;
+
+                ik_state.marker_pos[0] = updated_pos.x;
+                ik_state.marker_pos[1] = updated_pos.y;
+                ik_state.marker_pos[2] = updated_pos.z;
                 if (!ik_state.lock_orientation) {
-                    ik_state.marker_rpy_deg[0] = glm::degrees(rpy.x);
-                    ik_state.marker_rpy_deg[1] = glm::degrees(rpy.y);
-                    ik_state.marker_rpy_deg[2] = glm::degrees(rpy.z);
+                    ik_state.marker_rpy_deg[0] = updated_rpy_deg.x;
+                    ik_state.marker_rpy_deg[1] = updated_rpy_deg.y;
+                    ik_state.marker_rpy_deg[2] = updated_rpy_deg.z;
                 }
                 saveActiveMarkerToTarget();
                 ik_state.gizmo_pose_dirty = true;
@@ -1142,21 +1183,24 @@ int main(int argc, char** argv) {
         ImGui::TextWrapped("URDF: %s", urdf_path.c_str());
         ImGui::TextDisabled("视角：左键旋转，中键/Shift+左键平移，右键拖动缩放，滚轮缩放");
         ImGui::Separator();
-        ImGui::Checkbox("显示关节轴", &ui_state.show_axes);
-        ImGui::Checkbox("仅旋转关节轴", &ui_state.show_revolute_only);
-        ImGui::Checkbox("显示非旋转关节", &ui_state.show_non_revolute);
-        ImGui::Checkbox("显示世界坐标轴", &ui_state.show_world_axes);
-        ImGui::Checkbox("固定底座模式", &ui_state.lock_base);
-        ImGui::SliderFloat("关节轴长度", &ui_state.axis_length, 0.03f, 0.5f, "%.3f");
-        ImGui::SliderFloat("线宽", &ui_state.axis_line_width, 1.0f, 6.0f, "%.1f");
-        ImGui::SliderFloat("世界轴长度", &ui_state.world_axis_length, 0.1f, 1.5f, "%.2f");
-        ImGui::SliderFloat("地面网格尺寸", &ui_state.grid_size, 1.0f, 20.0f, "%.1f");
-        ImGui::SliderInt("地面网格密度", &ui_state.grid_count, 10, 120);
+        const char* sidebar_pages[] = {"场景", "IK", "回放", "关节", "TF"};
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::Combo("子页", &ui_state.sidebar_page, sidebar_pages, IM_ARRAYSIZE(sidebar_pages));
         ImGui::Separator();
 
-        ImGui::InputText("关节过滤", ui_state.joint_filter, sizeof(ui_state.joint_filter));
-        std::string filter = ui_state.joint_filter;
-        std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (ui_state.sidebar_page == 0) {
+            ImGui::Checkbox("显示关节轴", &ui_state.show_axes);
+            ImGui::Checkbox("仅旋转关节轴", &ui_state.show_revolute_only);
+            ImGui::Checkbox("显示非旋转关节", &ui_state.show_non_revolute);
+            ImGui::Checkbox("显示世界坐标轴", &ui_state.show_world_axes);
+            ImGui::Checkbox("固定底座模式", &ui_state.lock_base);
+            ImGui::SliderFloat("关节轴长度", &ui_state.axis_length, 0.03f, 0.5f, "%.3f");
+            ImGui::SliderFloat("线宽", &ui_state.axis_line_width, 1.0f, 6.0f, "%.1f");
+            ImGui::SliderFloat("世界轴长度", &ui_state.world_axis_length, 0.1f, 1.5f, "%.2f");
+            ImGui::SliderFloat("地面网格尺寸", &ui_state.grid_size, 1.0f, 20.0f, "%.1f");
+            ImGui::SliderInt("地面网格密度", &ui_state.grid_count, 10, 120);
+            ImGui::Separator();
+        }
 
         auto joints          = scene.getJointInfos();
         int revolute_count   = 0;
@@ -1178,48 +1222,105 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        ImGui::Text("关节总数: %d  旋转关节: %d  越界关节: %d", static_cast<int>(joints.size()), revolute_count, clamped_count);
-        if (!min_margin_joint.empty()) {
-            ImVec4 c = (min_margin_deg < 3.0f)
-                           ? ImVec4(1.0f, 0.25f, 0.25f, 1.0f)
-                           : ((min_margin_deg < 8.0f) ? ImVec4(1.0f, 0.75f, 0.25f, 1.0f) : ImVec4(0.6f, 0.9f, 0.6f, 1.0f));
-            ImGui::TextColored(c, "最小限位裕量: %.2f deg (%s)", min_margin_deg, min_margin_joint.c_str());
-        }
+        if (ui_state.sidebar_page == 3) {
+            ImGui::InputText("关节过滤", ui_state.joint_filter, sizeof(ui_state.joint_filter));
+            std::string filter = ui_state.joint_filter;
+            std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
-        if (ImGui::Button("旋转关节全部归零")) {
-            for (const auto& j : joints) {
-                if (j.revolute) {
-                    scene.setJointPositionByName(j.name, 0.0f);
+            ImGui::Text("关节总数: %d  旋转关节: %d  越界关节: %d", static_cast<int>(joints.size()), revolute_count, clamped_count);
+            if (!min_margin_joint.empty()) {
+                ImVec4 c = (min_margin_deg < 3.0f)
+                               ? ImVec4(1.0f, 0.25f, 0.25f, 1.0f)
+                               : ((min_margin_deg < 8.0f) ? ImVec4(1.0f, 0.75f, 0.25f, 1.0f) : ImVec4(0.6f, 0.9f, 0.6f, 1.0f));
+                ImGui::TextColored(c, "最小限位裕量: %.2f deg (%s)", min_margin_deg, min_margin_joint.c_str());
+            }
+
+            if (ImGui::Button("旋转关节全部归零")) {
+                for (const auto& j : joints) {
+                    if (j.revolute) {
+                        scene.setJointPositionByName(j.name, 0.0f);
+                    }
                 }
             }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("一键夹紧到限位内")) {
-            for (const auto& j : joints) {
-                if (!j.revolute) {
-                    continue;
+            ImGui::SameLine();
+            if (ImGui::Button("一键夹紧到限位内")) {
+                for (const auto& j : joints) {
+                    if (!j.revolute) {
+                        continue;
+                    }
+                    float v = std::clamp(j.position, j.min_angle, j.max_angle);
+                    scene.setJointPositionByName(j.name, v);
                 }
-                float v = std::clamp(j.position, j.min_angle, j.max_angle);
-                scene.setJointPositionByName(j.name, v);
             }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("保存当前姿态")) {
-            ui_state.pose_snapshot.clear();
-            for (const auto& j : joints) {
-                ui_state.pose_snapshot[j.name] = j.position;
+            ImGui::SameLine();
+            if (ImGui::Button("保存当前姿态")) {
+                ui_state.pose_snapshot.clear();
+                for (const auto& j : joints) {
+                    ui_state.pose_snapshot[j.name] = j.position;
+                }
             }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("恢复保存姿态") && !ui_state.pose_snapshot.empty()) {
-            for (const auto& [name, value] : ui_state.pose_snapshot) {
-                scene.setJointPositionByName(name, value);
+            ImGui::SameLine();
+            if (ImGui::Button("恢复保存姿态") && !ui_state.pose_snapshot.empty()) {
+                for (const auto& [name, value] : ui_state.pose_snapshot) {
+                    scene.setJointPositionByName(name, value);
+                }
+            }
+
+            ImGui::Separator();
+            ImGui::TextUnformatted("关节调试");
+            if (ImGui::BeginTable("joint_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                                  ImVec2(0.0f, ImGui::GetContentRegionAvail().y))) {
+                ImGui::TableSetupColumn("关节");
+                ImGui::TableSetupColumn("角度滑条");
+                ImGui::TableSetupColumn("限位");
+                ImGui::TableSetupColumn("数值输入(度)");
+                ImGui::TableHeadersRow();
+
+                for (const auto& j : joints) {
+                    if (!ui_state.show_non_revolute && !j.revolute) {
+                        continue;
+                    }
+                    std::string name_lower = j.name;
+                    std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(),
+                                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                    if (!filter.empty() && name_lower.find(filter) == std::string::npos) {
+                        continue;
+                    }
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(j.name.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    float value = j.position;
+                    if (j.revolute) {
+                        ImGui::PushItemWidth(-1);
+                        std::string slider_id = "##slider_" + j.name;
+                        if (ImGui::SliderAngle(slider_id.c_str(), &value, glm::degrees(j.min_angle), glm::degrees(j.max_angle))) {
+                            scene.setJointPositionByName(j.name, value);
+                        }
+                        ImGui::PopItemWidth();
+                    } else {
+                        ImGui::TextDisabled("不适用");
+                    }
+
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.2f / %.2f deg", glm::degrees(j.min_angle), glm::degrees(j.max_angle));
+                    ImGui::TableSetColumnIndex(3);
+                    float degree_val     = glm::degrees(j.position);
+                    std::string input_id = "##deg_" + j.name;
+                    if (ImGui::InputFloat(input_id.c_str(), &degree_val, 0.1f, 1.0f, "%.2f")) {
+                        float rad = glm::radians(degree_val);
+                        scene.setJointPositionByName(j.name, rad);
+                    }
+                }
+                ImGui::EndTable();
             }
         }
 
-        ImGui::Separator();
-        ImGui::TextUnformatted("末端 Marker IK（TRAC-IK）");
-        if (!ik_state.chains.empty()) {
+        if (ui_state.sidebar_page == 1) {
+            ImGui::Separator();
+            ImGui::TextUnformatted("末端 Marker IK（TRAC-IK）");
+            if (!ik_state.chains.empty()) {
             std::vector<const char*> chain_labels;
             chain_labels.reserve(ik_state.chains.size());
             for (const auto& c : ik_state.chains) {
@@ -1308,14 +1409,30 @@ int main(int argc, char** argv) {
                 if (ik_state.rotate_snap_enabled) {
                     ImGui::DragFloat("旋转步长(度)", &ik_state.rotate_snap_step_deg, 0.2f, 0.2f, 45.0f, "%.1f");
                 }
+                ImGui::TextUnformatted("平移通道增益");
+                ImGui::SliderFloat("Tx", &ik_state.translate_channel_gain[0], 0.0f, 2.0f, "%.2f");
+                ImGui::SliderFloat("Ty", &ik_state.translate_channel_gain[1], 0.0f, 2.0f, "%.2f");
+                ImGui::SliderFloat("Tz", &ik_state.translate_channel_gain[2], 0.0f, 2.0f, "%.2f");
+                ImGui::TextUnformatted("旋转通道增益");
+                ImGui::SliderFloat("Rx", &ik_state.rotate_channel_gain[0], 0.0f, 2.0f, "%.2f");
+                ImGui::SliderFloat("Ry", &ik_state.rotate_channel_gain[1], 0.0f, 2.0f, "%.2f");
+                ImGui::SliderFloat("Rz", &ik_state.rotate_channel_gain[2], 0.0f, 2.0f, "%.2f");
                 ImGui::TextDisabled("直接在3D视窗抓取 Gizmo 轴/圆环进行平移或旋转");
-                bool marker_edited = false;
-                marker_edited |= ImGui::DragFloat3("Marker 位置(m)", ik_state.marker_pos, 0.002f, -2.0f, 2.0f, "%.4f");
+                bool marker_pos_edited = ImGui::DragFloat3("Marker 位置(m)", ik_state.marker_pos, 0.002f, -2.0f, 2.0f, "%.4f");
+                bool marker_pos_commit = ImGui::IsItemDeactivatedAfterEdit();
                 ImGui::BeginDisabled(ik_state.lock_orientation);
-                marker_edited |= ImGui::DragFloat3("Marker 姿态RPY(度)", ik_state.marker_rpy_deg, 0.2f, -180.0f, 180.0f, "%.2f");
+                bool marker_rot_edited = ImGui::DragFloat3("Marker 姿态RPY(度)", ik_state.marker_rpy_deg, 0.2f, -180.0f, 180.0f, "%.2f");
+                bool marker_rot_commit = ImGui::IsItemDeactivatedAfterEdit();
                 ImGui::EndDisabled();
-                if (marker_edited) {
+                if (marker_pos_edited || marker_rot_edited) {
                     saveActiveMarkerToTarget();
+                    if (ik_state.realtime_ik_during_drag) {
+                        const bool position_only_target = marker_pos_edited && !marker_rot_edited;
+                        applyIkForActiveChain(false, true, position_only_target);
+                    }
+                } else if (!ik_state.realtime_ik_during_drag && (marker_pos_commit || marker_rot_commit)) {
+                    const bool position_only_target = marker_pos_commit && !marker_rot_commit;
+                    applyIkForActiveChain(false, false, position_only_target);
                 }
                 if (ImGui::Button("从当前末端同步Marker")) {
                     glm::vec3 tip_pos(0.0f);
@@ -1355,9 +1472,12 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        ImGui::Separator();
-        ImGui::TextUnformatted("姿态关键帧回放");
-        if (ImGui::Button("记录关键帧")) {
+        }
+
+        if (ui_state.sidebar_page == 2) {
+            ImGui::Separator();
+            ImGui::TextUnformatted("姿态关键帧回放");
+            if (ImGui::Button("记录关键帧")) {
             PoseKeyframe kf;
             kf.t = playback_state.keyframes.empty() ? 0.0 : (playback_state.keyframes.back().t + 1.0);
             for (const auto& j : joints) {
@@ -1368,114 +1488,46 @@ int main(int argc, char** argv) {
             playback_state.keyframes.push_back(std::move(kf));
             playback_state.play_time = static_cast<float>(playback_state.keyframes.back().t);
         }
-        ImGui::SameLine();
-        if (ImGui::Button(playback_state.playing ? "暂停回放" : "开始回放")) {
+            ImGui::SameLine();
+            if (ImGui::Button(playback_state.playing ? "暂停回放" : "开始回放")) {
             if (playback_state.keyframes.size() >= 2) {
                 playback_state.playing = !playback_state.playing;
             }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("清空关键帧")) {
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("清空关键帧")) {
             playback_state.keyframes.clear();
             playback_state.playing   = false;
             playback_state.play_time = 0.0f;
-        }
-        ImGui::Checkbox("循环回放", &playback_state.loop);
-        ImGui::SliderFloat("回放倍速", &playback_state.play_speed, 0.1f, 3.0f, "%.2fx");
-        if (!playback_state.keyframes.empty()) {
+            }
+            ImGui::Checkbox("循环回放", &playback_state.loop);
+            ImGui::SliderFloat("回放倍速", &playback_state.play_speed, 0.1f, 3.0f, "%.2fx");
+            if (!playback_state.keyframes.empty()) {
             float total = static_cast<float>(playback_state.keyframes.back().t);
             ImGui::SliderFloat("回放时间", &playback_state.play_time, 0.0f, std::max(0.0f, total), "%.2f s");
             ImGui::Text("关键帧数: %d", static_cast<int>(playback_state.keyframes.size()));
-        } else {
+            } else {
             ImGui::TextDisabled("暂无关键帧，先点击“记录关键帧”。");
+            }
         }
 
-        ImGui::Separator();
-        ImGui::TextUnformatted("关节调试");
-        ui_state.joint_section_height =
-            std::clamp(ui_state.joint_section_height, 120.0f, std::max(140.0f, ImGui::GetContentRegionAvail().y - 160.0f));
-        if (ImGui::BeginTable("joint_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                              ImVec2(0.0f, ui_state.joint_section_height))) {
-            ImGui::TableSetupColumn("关节");
-            ImGui::TableSetupColumn("角度滑条");
-            ImGui::TableSetupColumn("限位");
-            ImGui::TableSetupColumn("数值输入(度)");
-            ImGui::TableHeadersRow();
+        if (ui_state.sidebar_page == 4) {
+            ImGui::Separator();
+            ImGui::TextUnformatted("TF 视图");
+            ImGui::InputText("TF过滤", ui_state.tf_filter, sizeof(ui_state.tf_filter));
+            std::string tf_filter = ui_state.tf_filter;
+            std::transform(tf_filter.begin(), tf_filter.end(), tf_filter.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
-            for (const auto& j : joints) {
-                if (!ui_state.show_non_revolute && !j.revolute) {
-                    continue;
-                }
-                std::string name_lower = j.name;
-                std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(),
-                               [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-                if (!filter.empty() && name_lower.find(filter) == std::string::npos) {
-                    continue;
-                }
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(j.name.c_str());
-                ImGui::TableSetColumnIndex(1);
-                float value = j.position;
-                if (j.revolute) {
-                    ImGui::PushItemWidth(-1);
-                    std::string slider_id = "##slider_" + j.name;
-                    if (ImGui::SliderAngle(slider_id.c_str(), &value, glm::degrees(j.min_angle), glm::degrees(j.max_angle))) {
-                        scene.setJointPositionByName(j.name, value);
-                    }
-                    ImGui::PopItemWidth();
-                } else {
-                    ImGui::TextDisabled("不适用");
-                }
-
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Text("%.2f / %.2f deg", glm::degrees(j.min_angle), glm::degrees(j.max_angle));
-                ImGui::TableSetColumnIndex(3);
-                float degree_val     = glm::degrees(j.position);
-                std::string input_id = "##deg_" + j.name;
-                if (ImGui::InputFloat(input_id.c_str(), &degree_val, 0.1f, 1.0f, "%.2f")) {
-                    float rad = glm::radians(degree_val);
-                    scene.setJointPositionByName(j.name, rad);
-                }
-            }
-            ImGui::EndTable();
-        }
-
-        {
-            ImGuiIO& io   = ImGui::GetIO();
-            float avail_w = ImGui::GetContentRegionAvail().x;
-            ImGui::InvisibleButton("##joint_tf_splitter", ImVec2(avail_w, 8.0f));
-            bool hovered = ImGui::IsItemHovered();
-            bool active  = ImGui::IsItemActive();
-            if (hovered || active) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-            }
-            if (active) {
-                ui_state.joint_section_height += io.MouseDelta.y;
-            }
-            ImVec2 min = ImGui::GetItemRectMin();
-            ImVec2 max = ImGui::GetItemRectMax();
-            ImU32 c    = active ? IM_COL32(120, 200, 255, 220) : (hovered ? IM_COL32(120, 180, 240, 180) : IM_COL32(80, 110, 150, 120));
-            ImGui::GetWindowDrawList()->AddRectFilled(min, max, c, 2.0f);
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("TF 视图");
-        ImGui::InputText("TF过滤", ui_state.tf_filter, sizeof(ui_state.tf_filter));
-        std::string tf_filter = ui_state.tf_filter;
-        std::transform(tf_filter.begin(), tf_filter.end(), tf_filter.begin(),
-                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-        auto tfs = scene.getLinkTfInfos();
-        if (ImGui::BeginTable("tf_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                              ImVec2(0.0f, ImGui::GetContentRegionAvail().y))) {
-            ImGui::TableSetupColumn("Link");
-            ImGui::TableSetupColumn("父Link");
-            ImGui::TableSetupColumn("位置 xyz(m)");
-            ImGui::TableSetupColumn("姿态 rpy(deg)");
-            ImGui::TableHeadersRow();
-            for (const auto& tf : tfs) {
+            auto tfs = scene.getLinkTfInfos();
+            if (ImGui::BeginTable("tf_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                                  ImVec2(0.0f, ImGui::GetContentRegionAvail().y))) {
+                ImGui::TableSetupColumn("Link");
+                ImGui::TableSetupColumn("父Link");
+                ImGui::TableSetupColumn("位置 xyz(m)");
+                ImGui::TableSetupColumn("姿态 rpy(deg)");
+                ImGui::TableHeadersRow();
+                for (const auto& tf : tfs) {
                 std::string key       = tf.name + " " + tf.parent_name;
                 std::string key_lower = key;
                 std::transform(key_lower.begin(), key_lower.end(), key_lower.begin(),
@@ -1493,7 +1545,8 @@ int main(int argc, char** argv) {
                 ImGui::TableSetColumnIndex(3);
                 ImGui::Text("%.1f, %.1f, %.1f", glm::degrees(tf.world_rpy.x), glm::degrees(tf.world_rpy.y), glm::degrees(tf.world_rpy.z));
             }
-            ImGui::EndTable();
+                ImGui::EndTable();
+            }
         }
 
         ImGui::End();

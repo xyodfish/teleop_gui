@@ -1,6 +1,6 @@
 #pragma once
 
-#include "teleop_viewer/config.h"
+#include "teleop_viewer/config_types.h"
 #include "teleop_viewer/scene.h"
 
 #include <flex_ik.h>
