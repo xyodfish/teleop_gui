@@ -1,6 +1,16 @@
-#include "teleop_viewer/kinematic_viewer_config.h"
+#include "kinematic_viewer/kinematic_bootstrap.h"
+#include "kinematic_viewer/kinematic_playback.h"
+#include "kinematic_viewer/kinematic_sidebar_panels.h"
+#include "kinematic_viewer/kinematic_viewer_config.h"
+#include "kinematic_viewer/kinematic_marker_utils.h"
+#include "kinematic_viewer/kinematic_line_renderer.h"
+#include "kinematic_viewer/kinematic_runtime_state.h"
+#include "kinematic_viewer/kinematic_marker_target_state.h"
+#include "kinematic_viewer/kinematic_shader_utils.h"
+#include "kinematic_viewer/kinematic_ui_theme.h"
 #include "teleop_viewer/ik_solver.h"
 #include "teleop_viewer/scene.h"
+#include "kinematic_viewer/kinematic_ros_bridge.h"
 
 #include "imgui.h"
 #include "ImGuizmo.h"
@@ -15,268 +25,43 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#include <ros/ros.h>
-
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <filesystem>
 #include <iostream>
-#include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
-using omnilink::teleop_viewer::IkChainStatus;
-using omnilink::teleop_viewer::IkSolver;
 using omnilink::teleop_viewer::IkSolveStats;
+using kinematic_viewer::DebugPlaybackState;
+using kinematic_viewer::IkState;
+using kinematic_viewer::KinematicLineRenderer;
+using kinematic_viewer::KinematicLineVertex;
+using kinematic_viewer::KinematicRosBridge;
+using kinematic_viewer::KinematicViewerConfig;
+using kinematic_viewer::LoadActiveMarkerFromTarget;
+using kinematic_viewer::RenderJointPanel;
+using kinematic_viewer::RenderPlaybackPanel;
+using kinematic_viewer::RenderScenePanel;
+using kinematic_viewer::RenderTfPanel;
+using kinematic_viewer::SaveActiveMarkerToTarget;
+using kinematic_viewer::ViewerState;
 using omnilink::teleop_viewer::OrbitCamera;
 using omnilink::teleop_viewer::RobotScene;
-using omnilink::teleop_viewer::KinematicViewerConfig;
+using kinematic_viewer::ApplyPlaybackStep;
+using kinematic_viewer::appendCircle;
+using kinematic_viewer::appendMarkerAxes;
+using kinematic_viewer::createKinematicLineProgram;
+using kinematic_viewer::createKinematicMeshProgram;
+using kinematic_viewer::distancePointToSegment2D;
+using kinematic_viewer::EnsureMarkerTargetInitialized;
+using kinematic_viewer::LaunchConfig;
+using kinematic_viewer::LoadLaunchConfigFromArgs;
+using kinematic_viewer::markerWorldMatrix;
+using kinematic_viewer::worldToScreen;
+using kinematic_viewer::wrapDeltaDeg;
 
-namespace {
-
-    const char* kMeshVertexShader = R"(
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec2 aTexCoords;
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
-out vec3 FragPos;
-out vec3 Normal;
-out vec2 TexCoords;
-void main() {
-    FragPos = vec3(model * vec4(aPos, 1.0));
-    Normal = mat3(transpose(inverse(model))) * aNormal;
-    TexCoords = aTexCoords;
-    gl_Position = projection * view * vec4(FragPos, 1.0);
-}
-)";
-
-    const char* kMeshFragmentShader = R"(
-#version 330 core
-in vec3 FragPos;
-in vec3 Normal;
-in vec2 TexCoords;
-uniform vec3 lightPos;
-uniform vec3 viewPos;
-uniform vec3 diffuseColor;
-uniform bool hasTexture;
-uniform sampler2D texture_diffuse1;
-out vec4 color;
-void main() {
-    vec3 norm = normalize(Normal);
-    vec3 lightDir = normalize(lightPos - FragPos);
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * diffuseColor;
-    vec3 ambient = 0.58 * diffuseColor;
-    vec3 result = ambient + diffuse;
-    if (hasTexture) {
-        result *= texture(texture_diffuse1, TexCoords).rgb;
-    }
-    color = vec4(result, 1.0);
-}
-)";
-
-    const char* kLineVertexShader = R"(
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aColor;
-uniform mat4 view;
-uniform mat4 projection;
-out vec3 Color;
-void main() {
-    Color = aColor;
-    gl_Position = projection * view * vec4(aPos, 1.0);
-}
-)";
-
-    const char* kLineFragmentShader = R"(
-#version 330 core
-in vec3 Color;
-out vec4 FragColor;
-void main() {
-    FragColor = vec4(Color, 1.0);
-}
-)";
-
-    GLuint compileShader(GLenum type, const char* src) {
-        GLuint shader = glCreateShader(type);
-        glShaderSource(shader, 1, &src, nullptr);
-        glCompileShader(shader);
-        GLint ok = GL_FALSE;
-        glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-        if (ok != GL_TRUE) {
-            char log[1024];
-            glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-            std::cerr << "Shader compile failed: " << log << std::endl;
-        }
-        return shader;
-    }
-
-    GLuint createProgram(const char* vs_src, const char* fs_src) {
-        GLuint vs      = compileShader(GL_VERTEX_SHADER, vs_src);
-        GLuint fs      = compileShader(GL_FRAGMENT_SHADER, fs_src);
-        GLuint program = glCreateProgram();
-        glAttachShader(program, vs);
-        glAttachShader(program, fs);
-        glLinkProgram(program);
-        GLint ok = GL_FALSE;
-        glGetProgramiv(program, GL_LINK_STATUS, &ok);
-        if (ok != GL_TRUE) {
-            char log[1024];
-            glGetProgramInfoLog(program, sizeof(log), nullptr, log);
-            std::cerr << "Program link failed: " << log << std::endl;
-        }
-        glDeleteShader(vs);
-        glDeleteShader(fs);
-        return program;
-    }
-
-    struct LineVertex {
-        glm::vec3 p;
-        glm::vec3 c;
-    };
-
-    class LineRenderer {
-       public:
-        void init() {
-            glGenVertexArrays(1, &vao_);
-            glGenBuffers(1, &vbo_);
-        }
-
-        void draw(GLuint shader, const std::vector<LineVertex>& vertices, const glm::mat4& view, const glm::mat4& proj, float line_width) {
-            if (vertices.empty()) {
-                return;
-            }
-            glUseProgram(shader);
-            glUniformMatrix4fv(glGetUniformLocation(shader, "view"), 1, GL_FALSE, glm::value_ptr(view));
-            glUniformMatrix4fv(glGetUniformLocation(shader, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-
-            glBindVertexArray(vao_);
-            glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(LineVertex)), vertices.data(), GL_DYNAMIC_DRAW);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(LineVertex), (void*)offsetof(LineVertex, p));
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(LineVertex), (void*)offsetof(LineVertex, c));
-
-            glLineWidth(line_width);
-            glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
-            glBindVertexArray(0);
-        }
-
-        ~LineRenderer() {
-            if (vbo_ != 0)
-                glDeleteBuffers(1, &vbo_);
-            if (vao_ != 0)
-                glDeleteVertexArrays(1, &vao_);
-        }
-
-       private:
-        GLuint vao_ = 0;
-        GLuint vbo_ = 0;
-    };
-
-    struct ViewerState {
-        bool show_axes             = true;
-        bool show_world_axes       = true;
-        bool show_revolute_only    = true;
-        bool lock_base             = true;
-        bool show_non_revolute     = false;
-        float axis_length          = 0.12f;
-        float axis_line_width      = 2.0f;
-        float world_axis_length    = 0.4f;
-        float grid_size            = 4.0f;
-        int grid_count             = 40;
-        float panel_width          = 430.0f;
-        float joint_section_height = 260.0f;
-        bool panel_resize_active   = false;
-        char joint_filter[128]     = {0};
-        char tf_filter[128]        = {0};
-        int selected_joint         = -1;
-        std::unordered_map<std::string, float> pose_snapshot;
-        int sidebar_page = 3;  // 0:场景 1:IK 2:回放 3:关节 4:TF
-    };
-
-    struct IkState {
-        struct MarkerTarget {
-            bool initialized  = false;
-            glm::vec3 pos     = glm::vec3(0.0f);
-            glm::vec3 rpy_deg = glm::vec3(0.0f);
-        };
-
-        IkSolver solver;
-        std::vector<IkChainStatus> chains;
-        std::vector<MarkerTarget> marker_targets;
-        std::string solve_mode        = "single_chain";  // single_chain | full_body
-        std::string full_body_backend = "flex_ik";       // flex_ik | wbc_chain_ik
-        int full_body_iterations      = 3;
-        int selected_chain            = 0;
-        bool marker_initialized       = false;
-        bool lock_orientation         = false;
-        float marker_pos[3]           = {0.0f, 0.0f, 0.0f};
-        float marker_rpy_deg[3]       = {0.0f, 0.0f, 0.0f};
-        std::string last_status;
-        bool drag_mode_rotate             = false;
-        bool dragging_marker              = false;
-        bool marker_hovered               = false;
-        bool left_mouse_prev              = false;
-        int active_axis                   = -1;  // 0:x 1:y 2:z
-        bool active_rotate                = false;
-        float translate_sensitivity       = 0.35f;
-        float rotate_sensitivity          = 0.20f;
-        int drag_mode                     = 0;  // 0:view-plane move, 1/2/3 move x/y/z, 4/5/6 rotate x/y/z
-        float drag_prev_x                 = 0.0f;
-        float drag_prev_y                 = 0.0f;
-        bool drag_prev_valid              = false;
-        int gizmo_operation               = 0;  // 0 translate, 1 rotate, 2 universal
-        bool gizmo_was_using              = false;
-        bool gizmo_pose_dirty             = false;
-        bool gizmo_drag_interacted        = false;
-        bool gizmo_drag_position_only     = true;
-        bool gizmo_was_over               = false;
-        bool gizmo_world_mode             = true;
-        bool realtime_ik_during_drag      = true;
-        float realtime_ik_hz              = 30.0f;
-        double last_realtime_ik_apply_sec = -1.0;
-        float gizmo_size_clip_space       = 0.11f;
-        bool translate_snap_enabled       = false;
-        bool rotate_snap_enabled          = false;
-        float translate_snap_step_m       = 0.01f;
-        float rotate_snap_step_deg        = 5.0f;
-        bool refine_single_chain_on_drag_end = true;
-        bool refine_only_when_rotation       = false;
-        float translate_channel_gain[3]      = {1.0f, 1.0f, 1.0f};  // x/y/z
-        float rotate_channel_gain[3]         = {1.0f, 1.0f, 1.0f};   // roll/pitch/yaw
-
-        // External RViz interactive marker input (PoseStamped).
-        bool use_external_target           = true;
-        bool external_target_received      = false;
-        bool external_target_dirty         = false;
-        bool external_target_position_only = true;
-        std::string external_target_topic  = "/teleop_gui/ik_target_pose";
-        std::string external_target_expected_frame;
-        std::string external_target_last_frame;
-        glm::vec3 external_target_pos        = glm::vec3(0.0f);
-        glm::quat external_target_quat       = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);  // w, x, y, z
-        double external_target_last_recv_sec = 0.0;
-    };
-
-    struct PoseKeyframe {
-        double t = 0.0;
-        std::unordered_map<std::string, float> joints;
-    };
-
-    struct DebugPlaybackState {
-        std::vector<PoseKeyframe> keyframes;
-        bool playing     = false;
-        bool loop        = true;
-        float play_speed = 1.0f;
-        float play_time  = 0.0f;
-    };
+namespace robot_kinematic_viewer_internal {
 
     float g_scroll_delta = 0.0f;
 
@@ -284,269 +69,22 @@ void main() {
         g_scroll_delta += static_cast<float>(yoffset);
     }
 
-    std::string getUrdfPathFromArgs(int argc, char** argv) {
-        if (argc <= 1) {
-            return "config/robot_kinematic_viewer.yaml";
-        }
-        return argv[1];
-    }
+}  // namespace robot_kinematic_viewer_internal
 
-    bool fileExists(const std::string& path) {
-        std::error_code ec;
-        return std::filesystem::exists(path, ec);
-    }
-
-    void setupFonts(const KinematicViewerConfig& cfg) {
-        ImGuiIO& io           = ImGui::GetIO();
-        float font_size       = std::max(12.0f, cfg.ui.cjk_font_size);
-        const ImWchar* ranges = io.Fonts->GetGlyphRangesChineseFull();
-
-        std::string loaded_font_path;
-        ImFontConfig font_cfg;
-        font_cfg.OversampleH = 2;
-        font_cfg.OversampleV = 1;
-        font_cfg.PixelSnapH  = true;
-
-        std::vector<std::string> font_candidates;
-        if (!cfg.ui.cjk_font_path.empty()) {
-            font_candidates.push_back(cfg.ui.cjk_font_path);
-        }
-        font_candidates.push_back("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
-        font_candidates.push_back("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc");
-        font_candidates.push_back("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf");
-        font_candidates.push_back("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc");
-        font_candidates.push_back("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc");
-
-        for (const auto& path : font_candidates) {
-            if (!fileExists(path)) {
-                continue;
-            }
-            if (io.Fonts->AddFontFromFileTTF(path.c_str(), font_size, &font_cfg, ranges)) {
-                loaded_font_path = path;
-                std::cout << "[robot_kinematic_viewer] Loaded CJK font: " << loaded_font_path << " (size=" << font_size << ")" << std::endl;
-                return;
-            }
-        }
-        io.Fonts->AddFontDefault();
-        std::cerr << "[robot_kinematic_viewer] No CJK font found. Chinese text may show as '?'. "
-                  << "Please set ui.cjk_font_path in config." << std::endl;
-    }
-
-    void applyKinematicUiStyle() {
-        ImGui::StyleColorsDark();
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowRounding    = 10.0f;
-        style.ChildRounding     = 8.0f;
-        style.PopupRounding     = 8.0f;
-        style.FrameRounding     = 8.0f;
-        style.GrabRounding      = 8.0f;
-        style.ScrollbarRounding = 10.0f;
-        style.TabRounding       = 8.0f;
-        style.WindowPadding     = ImVec2(12.0f, 10.0f);
-        style.FramePadding      = ImVec2(10.0f, 7.0f);
-        style.ItemSpacing       = ImVec2(9.0f, 8.0f);
-        style.ItemInnerSpacing  = ImVec2(8.0f, 6.0f);
-        style.IndentSpacing     = 18.0f;
-        style.WindowBorderSize  = 1.0f;
-        style.ChildBorderSize   = 1.0f;
-        style.FrameBorderSize   = 1.0f;
-        style.ScrollbarSize     = 15.0f;
-        style.GrabMinSize       = 12.0f;
-
-        ImVec4* colors = style.Colors;
-        colors[ImGuiCol_WindowBg]             = ImVec4(0.08f, 0.10f, 0.13f, 1.00f);
-        colors[ImGuiCol_ChildBg]              = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
-        colors[ImGuiCol_PopupBg]              = ImVec4(0.11f, 0.13f, 0.17f, 0.98f);
-        colors[ImGuiCol_Border]               = ImVec4(0.27f, 0.33f, 0.40f, 0.90f);
-        colors[ImGuiCol_BorderShadow]         = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-        colors[ImGuiCol_Text]                 = ImVec4(0.92f, 0.95f, 0.98f, 1.00f);
-        colors[ImGuiCol_TextDisabled]         = ImVec4(0.58f, 0.64f, 0.71f, 1.00f);
-        colors[ImGuiCol_TitleBg]              = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
-        colors[ImGuiCol_TitleBgActive]        = ImVec4(0.13f, 0.18f, 0.24f, 1.00f);
-        colors[ImGuiCol_FrameBg]              = ImVec4(0.14f, 0.18f, 0.24f, 1.00f);
-        colors[ImGuiCol_FrameBgHovered]       = ImVec4(0.19f, 0.28f, 0.40f, 1.00f);
-        colors[ImGuiCol_FrameBgActive]        = ImVec4(0.22f, 0.35f, 0.50f, 1.00f);
-        colors[ImGuiCol_Button]               = ImVec4(0.18f, 0.30f, 0.44f, 0.85f);
-        colors[ImGuiCol_ButtonHovered]        = ImVec4(0.23f, 0.41f, 0.60f, 1.00f);
-        colors[ImGuiCol_ButtonActive]         = ImVec4(0.28f, 0.49f, 0.70f, 1.00f);
-        colors[ImGuiCol_Header]               = ImVec4(0.18f, 0.30f, 0.44f, 0.70f);
-        colors[ImGuiCol_HeaderHovered]        = ImVec4(0.23f, 0.41f, 0.60f, 0.88f);
-        colors[ImGuiCol_HeaderActive]         = ImVec4(0.28f, 0.49f, 0.70f, 1.00f);
-        colors[ImGuiCol_CheckMark]            = ImVec4(0.41f, 0.74f, 1.00f, 1.00f);
-        colors[ImGuiCol_SliderGrab]           = ImVec4(0.37f, 0.69f, 0.97f, 1.00f);
-        colors[ImGuiCol_SliderGrabActive]     = ImVec4(0.46f, 0.79f, 1.00f, 1.00f);
-        colors[ImGuiCol_ResizeGrip]           = ImVec4(0.36f, 0.62f, 0.87f, 0.35f);
-        colors[ImGuiCol_ResizeGripHovered]    = ImVec4(0.41f, 0.74f, 1.00f, 0.75f);
-        colors[ImGuiCol_ResizeGripActive]     = ImVec4(0.47f, 0.81f, 1.00f, 1.00f);
-        colors[ImGuiCol_Separator]            = ImVec4(0.27f, 0.33f, 0.40f, 0.95f);
-        colors[ImGuiCol_TableHeaderBg]        = ImVec4(0.13f, 0.19f, 0.27f, 1.00f);
-        colors[ImGuiCol_TableBorderStrong]    = ImVec4(0.29f, 0.36f, 0.44f, 1.00f);
-        colors[ImGuiCol_TableBorderLight]     = ImVec4(0.20f, 0.26f, 0.33f, 1.00f);
-        colors[ImGuiCol_TableRowBg]           = ImVec4(0.10f, 0.12f, 0.16f, 0.45f);
-        colors[ImGuiCol_TableRowBgAlt]        = ImVec4(0.12f, 0.15f, 0.20f, 0.65f);
-        colors[ImGuiCol_ScrollbarBg]          = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
-        colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.30f, 0.39f, 0.48f, 0.95f);
-        colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.39f, 0.51f, 0.62f, 0.95f);
-        colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.49f, 0.63f, 0.75f, 1.00f);
-    }
-
-    glm::mat4 markerWorldMatrix(const glm::vec3& pos, const glm::vec3& rpyDeg) {
-        glm::mat4 m = glm::translate(glm::mat4(1.0f), pos);
-        m           = m * glm::rotate(glm::mat4(1.0f), glm::radians(rpyDeg[0]), glm::vec3(1.0f, 0.0f, 0.0f));
-        m           = m * glm::rotate(glm::mat4(1.0f), glm::radians(rpyDeg[1]), glm::vec3(0.0f, 1.0f, 0.0f));
-        m           = m * glm::rotate(glm::mat4(1.0f), glm::radians(rpyDeg[2]), glm::vec3(0.0f, 0.0f, 1.0f));
-        return m;
-    }
-
-    float wrapDeltaDeg(float delta_deg) {
-        float wrapped = std::fmod(delta_deg + 180.0f, 360.0f);
-        if (wrapped < 0.0f) {
-            wrapped += 360.0f;
-        }
-        return wrapped - 180.0f;
-    }
-
-    void appendMarkerAxes(std::vector<LineVertex>* out, const glm::vec3& pos, const glm::vec3& rpy_deg, float axis_len, bool selected) {
-        if (out == nullptr) {
-            return;
-        }
-        const glm::mat4 rot    = markerWorldMatrix(glm::vec3(0.0f), rpy_deg);
-        const glm::vec3 x_axis = glm::normalize(glm::vec3(rot * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
-        const glm::vec3 y_axis = glm::normalize(glm::vec3(rot * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f)));
-        const glm::vec3 z_axis = glm::normalize(glm::vec3(rot * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f)));
-        const float scale      = selected ? 1.0f : 0.75f;
-        const glm::vec3 cx     = selected ? glm::vec3(1.0f, 0.25f, 0.25f) : glm::vec3(0.85f, 0.45f, 0.45f);
-        const glm::vec3 cy     = selected ? glm::vec3(0.25f, 1.0f, 0.25f) : glm::vec3(0.45f, 0.85f, 0.45f);
-        const glm::vec3 cz     = selected ? glm::vec3(0.25f, 0.55f, 1.0f) : glm::vec3(0.45f, 0.65f, 0.85f);
-
-        out->push_back({pos, cx});
-        out->push_back({pos + x_axis * axis_len * scale, cx});
-        out->push_back({pos, cy});
-        out->push_back({pos + y_axis * axis_len * scale, cy});
-        out->push_back({pos, cz});
-        out->push_back({pos + z_axis * axis_len * scale, cz});
-    }
-
-    void appendCircle(std::vector<LineVertex>* out, const glm::vec3& center, const glm::vec3& n, float r, const glm::vec3& c, int seg) {
-        if (out == nullptr || seg < 8) {
-            return;
-        }
-        glm::vec3 normal = glm::normalize(n);
-        glm::vec3 helper = std::fabs(normal.z) < 0.9f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
-        glm::vec3 u      = glm::normalize(glm::cross(normal, helper));
-        glm::vec3 v      = glm::normalize(glm::cross(normal, u));
-        for (int i = 0; i < seg; ++i) {
-            float t0     = (2.0f * 3.1415926f * static_cast<float>(i)) / static_cast<float>(seg);
-            float t1     = (2.0f * 3.1415926f * static_cast<float>(i + 1)) / static_cast<float>(seg);
-            glm::vec3 p0 = center + r * (std::cos(t0) * u + std::sin(t0) * v);
-            glm::vec3 p1 = center + r * (std::cos(t1) * u + std::sin(t1) * v);
-            out->push_back({p0, c});
-            out->push_back({p1, c});
-        }
-    }
-
-    glm::vec2 worldToScreen(const glm::vec3& p, const glm::mat4& view, const glm::mat4& proj, int viewport_w, int viewport_h, bool* ok) {
-        glm::vec4 clip = proj * view * glm::vec4(p, 1.0f);
-        if (std::fabs(clip.w) < 1e-6f) {
-            if (ok)
-                *ok = false;
-            return glm::vec2(-1.0f);
-        }
-        glm::vec3 ndc = glm::vec3(clip) / clip.w;
-        if (ok)
-            *ok = true;
-        return glm::vec2((ndc.x * 0.5f + 0.5f) * static_cast<float>(viewport_w),
-                         (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(viewport_h));
-    }
-
-    float distancePointToSegment2D(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b) {
-        glm::vec2 ab = b - a;
-        float ab2    = glm::dot(ab, ab);
-        if (ab2 < 1e-6f) {
-            return glm::length(p - a);
-        }
-        float t        = glm::clamp(glm::dot(p - a, ab) / ab2, 0.0f, 1.0f);
-        glm::vec2 proj = a + t * ab;
-        return glm::length(p - proj);
-    }
-
-    class KinematicRosBridge {
-       public:
-        explicit KinematicRosBridge(bool enabled) : enabled_(enabled) {}
-
-        bool initialize(int argc, char** argv) {
-            if (!enabled_) {
-                return true;
-            }
-            if (!ros::isInitialized()) {
-                ros::init(argc, argv, "robot_kinematic_viewer", ros::init_options::AnonymousName | ros::init_options::NoSigintHandler);
-            }
-            node_handle_ = std::make_unique<ros::NodeHandle>("~");
-            return true;
-        }
-
-        bool enabled() const {
-            return enabled_;
-        }
-
-        void spinOnce() const {
-            if (enabled_ && ros::ok()) {
-                ros::spinOnce();
-            }
-        }
-
-        template <typename T>
-        bool getParam(const std::string& key, T* out) const {
-            if (!enabled_ || node_handle_ == nullptr || out == nullptr) {
-                return false;
-            }
-            return node_handle_->getParam(key, *out);
-        }
-
-        template <typename T>
-        void param(const std::string& key, T* value, const T& default_value) const {
-            if (value == nullptr) {
-                return;
-            }
-            if (!enabled_ || node_handle_ == nullptr) {
-                *value = default_value;
-                return;
-            }
-            node_handle_->param<T>(key, *value, default_value);
-        }
-
-        template <typename Callback>
-        void subscribeExternalTarget(const std::string& topic, uint32_t queue_size, Callback&& callback) {
-            if (!enabled_ || node_handle_ == nullptr) {
-                return;
-            }
-            external_target_sub_ = node_handle_->subscribe<geometry_msgs::PoseStamped>(topic, queue_size, std::forward<Callback>(callback));
-        }
-
-       private:
-        bool enabled_ = true;
-        std::unique_ptr<ros::NodeHandle> node_handle_;
-        ros::Subscriber external_target_sub_;
-    };
-
-}  // namespace
+using robot_kinematic_viewer_internal::g_scroll_delta;
+using robot_kinematic_viewer_internal::ScrollCallback;
 
 int main(int argc, char** argv) {
-    std::string config_or_urdf = getUrdfPathFromArgs(argc, argv);
-    const bool is_urdf_input   = config_or_urdf.size() > 5 && config_or_urdf.substr(config_or_urdf.size() - 5) == ".urdf";
-    KinematicViewerConfig cfg;
-    std::string urdf_path = cfg.robot.urdf_path;
-    if (is_urdf_input) {
-        urdf_path = config_or_urdf;
-    } else {
-        bool loaded_ok = false;
-        cfg            = KinematicViewerConfig::LoadFromFile(config_or_urdf, &loaded_ok);
-        if (!loaded_ok) {
-            std::cerr << "[robot_kinematic_viewer] 配置加载失败，请使用独立配置文件: " << config_or_urdf << std::endl;
-            return 1;
+    LaunchConfig launch;
+    std::string launchError;
+    if (!LoadLaunchConfigFromArgs(argc, argv, &launch, &launchError)) {
+        if (!launchError.empty()) {
+            std::cerr << launchError << std::endl;
         }
-        urdf_path = cfg.robot.urdf_path;
+        return 1;
     }
+    KinematicViewerConfig cfg = launch.config;
+    std::string urdf_path     = launch.urdfPath.empty() ? cfg.robot.urdf_path : launch.urdfPath;
 
     if (!glfwInit()) {
         std::cerr << "glfwInit failed\n";
@@ -575,14 +113,14 @@ int main(int argc, char** argv) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    setupFonts(cfg);
-    applyKinematicUiStyle();
+    kinematic_viewer::SetupKinematicViewerFonts(cfg);
+    kinematic_viewer::ApplyKinematicUiStyle();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    GLuint mesh_shader = createProgram(kMeshVertexShader, kMeshFragmentShader);
-    GLuint line_shader = createProgram(kLineVertexShader, kLineFragmentShader);
-    LineRenderer line_renderer;
+    GLuint mesh_shader = createKinematicMeshProgram();
+    GLuint line_shader = createKinematicLineProgram();
+    KinematicLineRenderer line_renderer;
     line_renderer.init();
 
     RobotScene scene;
@@ -681,7 +219,7 @@ int main(int argc, char** argv) {
                 ik_state.external_target_quat = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
             }
             ik_state.external_target_last_frame    = frame;
-            ik_state.external_target_last_recv_sec = ros::Time::now().toSec();
+            ik_state.external_target_last_recv_sec = ros_bridge.nowSec();
             ik_state.external_target_received      = true;
             ik_state.external_target_dirty         = true;
         });
@@ -692,47 +230,15 @@ int main(int argc, char** argv) {
     double last_frame_sec = glfwGetTime();
 
     auto ensureMarkerTargetInitialized = [&](int chain_index) -> bool {
-        if (chain_index < 0 || chain_index >= static_cast<int>(ik_state.marker_targets.size())) {
-            return false;
-        }
-        auto& target = ik_state.marker_targets[chain_index];
-        if (target.initialized) {
-            return true;
-        }
-        glm::vec3 tip_pos(0.0f);
-        glm::vec3 tip_rpy(0.0f);
-        if (!ik_state.solver.fetchTipWorldPose(scene, chain_index, &tip_pos, &tip_rpy)) {
-            return false;
-        }
-        target.pos         = tip_pos;
-        target.rpy_deg     = glm::vec3(glm::degrees(tip_rpy.x), glm::degrees(tip_rpy.y), glm::degrees(tip_rpy.z));
-        target.initialized = true;
-        return true;
+        return EnsureMarkerTargetInitialized(&ik_state, &scene, chain_index);
     };
 
     auto loadActiveMarkerFromTarget = [&]() -> bool {
-        if (!ensureMarkerTargetInitialized(ik_state.selected_chain)) {
-            return false;
-        }
-        const auto& target          = ik_state.marker_targets[ik_state.selected_chain];
-        ik_state.marker_pos[0]      = target.pos.x;
-        ik_state.marker_pos[1]      = target.pos.y;
-        ik_state.marker_pos[2]      = target.pos.z;
-        ik_state.marker_rpy_deg[0]  = target.rpy_deg.x;
-        ik_state.marker_rpy_deg[1]  = target.rpy_deg.y;
-        ik_state.marker_rpy_deg[2]  = target.rpy_deg.z;
-        ik_state.marker_initialized = true;
-        return true;
+        return LoadActiveMarkerFromTarget(&ik_state, &scene);
     };
 
     auto saveActiveMarkerToTarget = [&]() {
-        if (ik_state.selected_chain < 0 || ik_state.selected_chain >= static_cast<int>(ik_state.marker_targets.size())) {
-            return;
-        }
-        auto& target       = ik_state.marker_targets[ik_state.selected_chain];
-        target.pos         = glm::vec3(ik_state.marker_pos[0], ik_state.marker_pos[1], ik_state.marker_pos[2]);
-        target.rpy_deg     = glm::vec3(ik_state.marker_rpy_deg[0], ik_state.marker_rpy_deg[1], ik_state.marker_rpy_deg[2]);
-        target.initialized = true;
+        SaveActiveMarkerToTarget(&ik_state);
     };
 
     if (!ik_state.chains.empty()) {
@@ -798,42 +304,7 @@ int main(int argc, char** argv) {
         glClearColor(0.90f, 0.92f, 0.96f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        if (playback_state.playing && playback_state.keyframes.size() >= 2) {
-            const float total = static_cast<float>(playback_state.keyframes.back().t);
-            playback_state.play_time += static_cast<float>(dt_sec) * playback_state.play_speed;
-            if (playback_state.loop && total > 1e-4f) {
-                while (playback_state.play_time > total) {
-                    playback_state.play_time -= total;
-                }
-            } else if (playback_state.play_time > total) {
-                playback_state.play_time = total;
-                playback_state.playing   = false;
-            }
-
-            size_t hi = 1;
-            while (hi < playback_state.keyframes.size() && static_cast<float>(playback_state.keyframes[hi].t) < playback_state.play_time) {
-                ++hi;
-            }
-            size_t lo      = (hi == 0) ? 0 : (hi - 1);
-            hi             = std::min(hi, playback_state.keyframes.size() - 1);
-            const auto& k0 = playback_state.keyframes[lo];
-            const auto& k1 = playback_state.keyframes[hi];
-            float t0       = static_cast<float>(k0.t);
-            float t1       = static_cast<float>(k1.t);
-            float alpha    = (t1 > t0 + 1e-6f) ? ((playback_state.play_time - t0) / (t1 - t0)) : 0.0f;
-            alpha          = std::clamp(alpha, 0.0f, 1.0f);
-
-            auto joints_now = scene.getJointInfos();
-            for (const auto& j : joints_now) {
-                auto it0 = k0.joints.find(j.name);
-                auto it1 = k1.joints.find(j.name);
-                if (it0 == k0.joints.end() || it1 == k1.joints.end()) {
-                    continue;
-                }
-                float v = it0->second * (1.0f - alpha) + it1->second * alpha;
-                scene.setJointPositionByName(j.name, v);
-            }
-        }
+        ApplyPlaybackStep(&playback_state, &scene, dt_sec);
 
         scene.setFixedBaseMode(ui_state.lock_base);
         scene.updateTransforms();
@@ -851,7 +322,7 @@ int main(int argc, char** argv) {
         glUniform3f(glGetUniformLocation(mesh_shader, "viewPos"), eye.x, eye.y, eye.z);
         scene.draw(mesh_shader);
 
-        std::vector<LineVertex> axis_vertices;
+        std::vector<KinematicLineVertex> axis_vertices;
         {
             float half = ui_state.grid_size;
             int count  = std::max(2, ui_state.grid_count);
@@ -1303,132 +774,12 @@ int main(int argc, char** argv) {
         ImGui::Separator();
 
         if (ui_state.sidebar_page == 0) {
-            ImGui::Checkbox("显示关节轴", &ui_state.show_axes);
-            ImGui::Checkbox("仅旋转关节轴", &ui_state.show_revolute_only);
-            ImGui::Checkbox("显示非旋转关节", &ui_state.show_non_revolute);
-            ImGui::Checkbox("显示世界坐标轴", &ui_state.show_world_axes);
-            ImGui::Checkbox("固定底座模式", &ui_state.lock_base);
-            ImGui::SliderFloat("关节轴长度", &ui_state.axis_length, 0.03f, 0.5f, "%.3f");
-            ImGui::SliderFloat("线宽", &ui_state.axis_line_width, 1.0f, 6.0f, "%.1f");
-            ImGui::SliderFloat("世界轴长度", &ui_state.world_axis_length, 0.1f, 1.5f, "%.2f");
-            ImGui::SliderFloat("地面网格尺寸", &ui_state.grid_size, 1.0f, 20.0f, "%.1f");
-            ImGui::SliderInt("地面网格密度", &ui_state.grid_count, 10, 120);
-            ImGui::Separator();
+            RenderScenePanel(&ui_state);
         }
 
-        auto joints          = scene.getJointInfos();
-        int revolute_count   = 0;
-        int clamped_count    = 0;
-        float min_margin_deg = 1e9f;
-        std::string min_margin_joint;
-        for (const auto& j : joints) {
-            if (j.revolute)
-                revolute_count++;
-            if (j.position < j.min_angle - 1e-5f || j.position > j.max_angle + 1e-5f)
-                clamped_count++;
-            if (j.revolute) {
-                float d0 = std::fabs(j.position - j.min_angle);
-                float d1 = std::fabs(j.max_angle - j.position);
-                float m  = glm::degrees(std::min(d0, d1));
-                if (m < min_margin_deg) {
-                    min_margin_deg   = m;
-                    min_margin_joint = j.name;
-                }
-            }
-        }
+        auto joints = scene.getJointInfos();
         if (ui_state.sidebar_page == 3) {
-            ImGui::InputText("关节过滤", ui_state.joint_filter, sizeof(ui_state.joint_filter));
-            std::string filter = ui_state.joint_filter;
-            std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-            ImGui::Text("关节总数: %d  旋转关节: %d  越界关节: %d", static_cast<int>(joints.size()), revolute_count, clamped_count);
-            if (!min_margin_joint.empty()) {
-                ImVec4 c = (min_margin_deg < 3.0f)
-                               ? ImVec4(1.0f, 0.25f, 0.25f, 1.0f)
-                               : ((min_margin_deg < 8.0f) ? ImVec4(1.0f, 0.75f, 0.25f, 1.0f) : ImVec4(0.6f, 0.9f, 0.6f, 1.0f));
-                ImGui::TextColored(c, "最小限位裕量: %.2f deg (%s)", min_margin_deg, min_margin_joint.c_str());
-            }
-
-            if (ImGui::Button("旋转关节全部归零")) {
-                for (const auto& j : joints) {
-                    if (j.revolute) {
-                        scene.setJointPositionByName(j.name, 0.0f);
-                    }
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("一键夹紧到限位内")) {
-                for (const auto& j : joints) {
-                    if (!j.revolute) {
-                        continue;
-                    }
-                    float v = std::clamp(j.position, j.min_angle, j.max_angle);
-                    scene.setJointPositionByName(j.name, v);
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("保存当前姿态")) {
-                ui_state.pose_snapshot.clear();
-                for (const auto& j : joints) {
-                    ui_state.pose_snapshot[j.name] = j.position;
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("恢复保存姿态") && !ui_state.pose_snapshot.empty()) {
-                for (const auto& [name, value] : ui_state.pose_snapshot) {
-                    scene.setJointPositionByName(name, value);
-                }
-            }
-
-            ImGui::Separator();
-            ImGui::TextUnformatted("关节调试");
-            if (ImGui::BeginTable("joint_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                                  ImVec2(0.0f, ImGui::GetContentRegionAvail().y))) {
-                ImGui::TableSetupColumn("关节");
-                ImGui::TableSetupColumn("角度滑条");
-                ImGui::TableSetupColumn("限位");
-                ImGui::TableSetupColumn("数值输入(度)");
-                ImGui::TableHeadersRow();
-
-                for (const auto& j : joints) {
-                    if (!ui_state.show_non_revolute && !j.revolute) {
-                        continue;
-                    }
-                    std::string name_lower = j.name;
-                    std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(),
-                                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-                    if (!filter.empty() && name_lower.find(filter) == std::string::npos) {
-                        continue;
-                    }
-
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextUnformatted(j.name.c_str());
-                    ImGui::TableSetColumnIndex(1);
-                    float value = j.position;
-                    if (j.revolute) {
-                        ImGui::PushItemWidth(-1);
-                        std::string slider_id = "##slider_" + j.name;
-                        if (ImGui::SliderAngle(slider_id.c_str(), &value, glm::degrees(j.min_angle), glm::degrees(j.max_angle))) {
-                            scene.setJointPositionByName(j.name, value);
-                        }
-                        ImGui::PopItemWidth();
-                    } else {
-                        ImGui::TextDisabled("不适用");
-                    }
-
-                    ImGui::TableSetColumnIndex(2);
-                    ImGui::Text("%.2f / %.2f deg", glm::degrees(j.min_angle), glm::degrees(j.max_angle));
-                    ImGui::TableSetColumnIndex(3);
-                    float degree_val     = glm::degrees(j.position);
-                    std::string input_id = "##deg_" + j.name;
-                    if (ImGui::InputFloat(input_id.c_str(), &degree_val, 0.1f, 1.0f, "%.2f")) {
-                        float rad = glm::radians(degree_val);
-                        scene.setJointPositionByName(j.name, rad);
-                    }
-                }
-                ImGui::EndTable();
-            }
+            RenderJointPanel(&ui_state, &scene, joints);
         }
 
         if (ui_state.sidebar_page == 1) {
@@ -1472,7 +823,7 @@ int main(int argc, char** argv) {
             if (!ros_bridge.enabled()) {
                 ImGui::TextDisabled("外部位姿: ROS 未启用");
             } else if (ik_state.external_target_received) {
-                double now_ros_sec = ros::Time::now().toSec();
+                double now_ros_sec = ros_bridge.nowSec();
                 double age_sec     = std::max(0.0, now_ros_sec - ik_state.external_target_last_recv_sec);
                 ImGui::Text("外部位姿: 已接收, frame=%s, %.2fs前",
                             ik_state.external_target_last_frame.empty() ? "<empty>" : ik_state.external_target_last_frame.c_str(), age_sec);
@@ -1591,78 +942,11 @@ int main(int argc, char** argv) {
         }
 
         if (ui_state.sidebar_page == 2) {
-            ImGui::Separator();
-            ImGui::TextUnformatted("姿态关键帧回放");
-            if (ImGui::Button("记录关键帧")) {
-            PoseKeyframe kf;
-            kf.t = playback_state.keyframes.empty() ? 0.0 : (playback_state.keyframes.back().t + 1.0);
-            for (const auto& j : joints) {
-                if (j.revolute) {
-                    kf.joints[j.name] = j.position;
-                }
-            }
-            playback_state.keyframes.push_back(std::move(kf));
-            playback_state.play_time = static_cast<float>(playback_state.keyframes.back().t);
-        }
-            ImGui::SameLine();
-            if (ImGui::Button(playback_state.playing ? "暂停回放" : "开始回放")) {
-            if (playback_state.keyframes.size() >= 2) {
-                playback_state.playing = !playback_state.playing;
-            }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("清空关键帧")) {
-            playback_state.keyframes.clear();
-            playback_state.playing   = false;
-            playback_state.play_time = 0.0f;
-            }
-            ImGui::Checkbox("循环回放", &playback_state.loop);
-            ImGui::SliderFloat("回放倍速", &playback_state.play_speed, 0.1f, 3.0f, "%.2fx");
-            if (!playback_state.keyframes.empty()) {
-            float total = static_cast<float>(playback_state.keyframes.back().t);
-            ImGui::SliderFloat("回放时间", &playback_state.play_time, 0.0f, std::max(0.0f, total), "%.2f s");
-            ImGui::Text("关键帧数: %d", static_cast<int>(playback_state.keyframes.size()));
-            } else {
-            ImGui::TextDisabled("暂无关键帧，先点击“记录关键帧”。");
-            }
+            RenderPlaybackPanel(&playback_state, joints);
         }
 
         if (ui_state.sidebar_page == 4) {
-            ImGui::Separator();
-            ImGui::TextUnformatted("TF 视图");
-            ImGui::InputText("TF过滤", ui_state.tf_filter, sizeof(ui_state.tf_filter));
-            std::string tf_filter = ui_state.tf_filter;
-            std::transform(tf_filter.begin(), tf_filter.end(), tf_filter.begin(),
-                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-            auto tfs = scene.getLinkTfInfos();
-            if (ImGui::BeginTable("tf_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                                  ImVec2(0.0f, ImGui::GetContentRegionAvail().y))) {
-                ImGui::TableSetupColumn("Link");
-                ImGui::TableSetupColumn("父Link");
-                ImGui::TableSetupColumn("位置 xyz(m)");
-                ImGui::TableSetupColumn("姿态 rpy(deg)");
-                ImGui::TableHeadersRow();
-                for (const auto& tf : tfs) {
-                std::string key       = tf.name + " " + tf.parent_name;
-                std::string key_lower = key;
-                std::transform(key_lower.begin(), key_lower.end(), key_lower.begin(),
-                               [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-                if (!tf_filter.empty() && key_lower.find(tf_filter) == std::string::npos) {
-                    continue;
-                }
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted(tf.name.c_str());
-                ImGui::TableSetColumnIndex(1);
-                ImGui::TextUnformatted(tf.parent_name.empty() ? "-" : tf.parent_name.c_str());
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Text("%.3f, %.3f, %.3f", tf.world_position.x, tf.world_position.y, tf.world_position.z);
-                ImGui::TableSetColumnIndex(3);
-                ImGui::Text("%.1f, %.1f, %.1f", glm::degrees(tf.world_rpy.x), glm::degrees(tf.world_rpy.y), glm::degrees(tf.world_rpy.z));
-            }
-                ImGui::EndTable();
-            }
+            RenderTfPanel(&ui_state, scene.getLinkTfInfos());
         }
 
         ImGui::End();
@@ -1679,8 +963,6 @@ int main(int argc, char** argv) {
     ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();
-    if (ros::isStarted()) {
-        ros::shutdown();
-    }
+    ros_bridge.shutdown();
     return 0;
 }

@@ -134,8 +134,8 @@ include_directories(
     ${EIGEN3_INCLUDE_DIRS}
     ${EMBOSA_INCLUDE_DIR}
     ${trac_ik_INCLUDE_DIR}
-    ${PROJECT_SOURCE_DIR}/include/teleop_viewer/ik_backends/flex_ik
-    ${PROJECT_SOURCE_DIR}/include/teleop_viewer/ik_backends/wbc_chain_ik
+    ${PROJECT_SOURCE_DIR}/include/ik_backends/flex_ik
+    ${PROJECT_SOURCE_DIR}/include/ik_backends/wbc_chain_ik
 )
 
 link_directories(
@@ -159,18 +159,18 @@ add_library(imguizmo
 )
 
 add_library(flex_ik_core STATIC
-    src/teleop_viewer/ik_backends/flex_ik/flex_ik.cc
+    src/ik_backends/flex_ik/flex_ik.cc
 )
-target_include_directories(flex_ik_core PUBLIC include/teleop_viewer/ik_backends/flex_ik)
+target_include_directories(flex_ik_core PUBLIC include/ik_backends/flex_ik)
 target_link_libraries(flex_ik_core PUBLIC Eigen3::Eigen pinocchio::pinocchio)
 
 add_library(wbc_chain_ik_core STATIC
-    src/teleop_viewer/ik_backends/wbc_chain_ik/robot/traits/chain_ik.cpp
-    src/teleop_viewer/ik_backends/wbc_chain_ik/solver/hqp_solver.cpp
-    src/teleop_viewer/ik_backends/wbc_chain_ik/solver/qp_solver.cpp
-    src/teleop_viewer/ik_backends/wbc_chain_ik/math/helper_functions.cpp
+    src/ik_backends/wbc_chain_ik/robot/traits/chain_ik.cpp
+    src/ik_backends/wbc_chain_ik/solver/hqp_solver.cpp
+    src/ik_backends/wbc_chain_ik/solver/qp_solver.cpp
+    src/ik_backends/wbc_chain_ik/math/helper_functions.cpp
 )
-target_include_directories(wbc_chain_ik_core PUBLIC include/teleop_viewer/ik_backends/wbc_chain_ik)
+target_include_directories(wbc_chain_ik_core PUBLIC include/ik_backends/wbc_chain_ik)
 target_link_libraries(wbc_chain_ik_core PUBLIC Eigen3::Eigen pinocchio::pinocchio)
 
 # 将你的库与必要的依赖项链接：ImGui本身、GLFW、OpenGL
@@ -196,7 +196,16 @@ add_executable(robot_viewer
 
 add_executable(robot_kinematic_viewer
     src/robot_kinematic_viewer.cpp
-    src/teleop_viewer/kinematic_viewer_config.cpp
+    src/kinematic_viewer/kinematic_viewer_config.cpp
+    src/kinematic_viewer/kinematic_bootstrap.cpp
+    src/kinematic_viewer/kinematic_playback.cpp
+    src/kinematic_viewer/kinematic_marker_target_state.cpp
+    src/kinematic_viewer/kinematic_ros_bridge.cpp
+    src/kinematic_viewer/kinematic_sidebar_panels.cpp
+    src/kinematic_viewer/kinematic_ui_theme.cpp
+    src/kinematic_viewer/kinematic_marker_utils.cpp
+    src/kinematic_viewer/kinematic_shader_utils.cpp
+    src/kinematic_viewer/kinematic_line_renderer.cpp
     src/teleop_viewer/ik_solver.cpp
     src/teleop_viewer/scene.cpp
     deps/glad/glad.c

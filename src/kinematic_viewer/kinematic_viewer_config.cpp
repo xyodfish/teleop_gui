@@ -1,4 +1,4 @@
-#include "teleop_viewer/kinematic_viewer_config.h"
+#include "kinematic_viewer/kinematic_viewer_config.h"
 
 #include <yaml-cpp/yaml.h>
 
@@ -8,8 +8,8 @@
 #include <unordered_set>
 #include <utility>
 
-namespace omnilink::teleop_viewer {
-namespace {
+namespace kinematic_viewer {
+namespace kinematic_viewer_config_internal {
 
 template <typename T>
 void ReadScalar(const YAML::Node& node, const char* key, T& out) {
@@ -104,9 +104,10 @@ void ValidateTopLevelKeys(const YAML::Node& root) {
     }
 }
 
-}  // namespace
+}  // namespace kinematic_viewer_config_internal
 
 KinematicViewerConfig KinematicViewerConfig::LoadFromFile(const std::string& yaml_path, bool* loaded_ok) {
+    using namespace kinematic_viewer_config_internal;
     KinematicViewerConfig cfg;
     bool ok = false;
 
@@ -154,4 +155,4 @@ KinematicViewerConfig KinematicViewerConfig::LoadFromFile(const std::string& yam
     return cfg;
 }
 
-}  // namespace omnilink::teleop_viewer
+}  // namespace kinematic_viewer
