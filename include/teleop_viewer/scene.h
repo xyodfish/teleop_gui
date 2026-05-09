@@ -56,6 +56,12 @@ class RobotScene {
         glm::vec3 world_position = glm::vec3(0.0f);
         glm::vec3 world_rpy = glm::vec3(0.0f);
     };
+    struct LinkCollisionProxy {
+        std::string link_name;
+        std::string visual_name;
+        glm::vec3 world_center = glm::vec3(0.0f);
+        float radius_m = 0.0f;
+    };
 
     RobotScene();
     ~RobotScene();
@@ -72,7 +78,9 @@ class RobotScene {
     std::vector<JointInfo> getJointInfos() const;
     std::vector<JointAxisInfo> getJointAxisInfos(bool revolute_only = true) const;
     std::vector<LinkTfInfo> getLinkTfInfos() const;
+    std::vector<LinkCollisionProxy> getLinkCollisionProxies() const;
     bool getLinkWorldTransform(const std::string& link_name, glm::mat4* out_world_transform) const;
+    bool getLinkParentName(const std::string& link_name, std::string* out_parent_name) const;
 
     void setFixedBaseMode(bool enabled);
     bool fixedBaseMode() const;

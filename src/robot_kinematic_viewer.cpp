@@ -1,4 +1,5 @@
 #include "kinematic_viewer/kinematic_bootstrap.h"
+#include "kinematic_viewer/kinematic_collision_monitor.h"
 #include "kinematic_viewer/kinematic_playback.h"
 #include "kinematic_viewer/kinematic_sidebar_panels.h"
 #include "kinematic_viewer/kinematic_viewer_config.h"
@@ -34,6 +35,9 @@
 
 using omnilink::teleop_viewer::IkSolveStats;
 using kinematic_viewer::DebugPlaybackState;
+using kinematic_viewer::CollisionMonitor;
+using kinematic_viewer::CollisionMonitorResult;
+using kinematic_viewer::CollisionMonitorState;
 using kinematic_viewer::IkState;
 using kinematic_viewer::KinematicLineRenderer;
 using kinematic_viewer::KinematicLineVertex;
@@ -43,12 +47,13 @@ using kinematic_viewer::LoadActiveMarkerFromTarget;
 using kinematic_viewer::RenderJointPanel;
 using kinematic_viewer::RenderPlaybackPanel;
 using kinematic_viewer::RenderScenePanel;
+using kinematic_viewer::RenderSafetyPanel;
 using kinematic_viewer::RenderTfPanel;
 using kinematic_viewer::SaveActiveMarkerToTarget;
 using kinematic_viewer::ViewerState;
 using omnilink::teleop_viewer::OrbitCamera;
 using omnilink::teleop_viewer::RobotScene;
-using kinematic_viewer::ApplyPlaybackStep;
+using kinematic_viewer::TrajectoryPlayer;
 using kinematic_viewer::appendCircle;
 using kinematic_viewer::appendMarkerAxes;
 using kinematic_viewer::createKinematicLineProgram;
@@ -163,6 +168,9 @@ int main(int argc, char** argv) {
 
     IkState ik_state;
     DebugPlaybackState playback_state;
+    CollisionMonitorState collision_state;
+    TrajectoryPlayer trajectory_player;
+    CollisionMonitor collision_monitor;
     {
         ik_state.solve_mode = cfg.ik.mode;
         std::transform(ik_state.solve_mode.begin(), ik_state.solve_mode.end(), ik_state.solve_mode.begin(),
@@ -273,10 +281,16 @@ int main(int argc, char** argv) {
         int viewport_w       = std::max(1, fb_w - panel_w);
         int viewport_h       = std::max(1, fb_h);
 
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        ImGuizmo::BeginFrame();
+
         bool mouse_in_viewport = (x >= 0.0 && x < static_cast<double>(viewport_w) && y >= 0.0 && y < static_cast<double>(viewport_h));
         const bool block_camera_input = ui_state.panel_resize_active;
+        const bool imgui_capturing_mouse = ImGui::GetIO().WantCaptureMouse;
         if (mouse_in_viewport && !block_camera_input && !ik_state.dragging_marker && !ik_state.gizmo_was_using &&
-            !ik_state.gizmo_was_over) {
+            !ik_state.gizmo_was_over && !imgui_capturing_mouse) {
             bool left   = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
             bool middle = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
             bool right  = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
@@ -294,20 +308,17 @@ int main(int argc, char** argv) {
             }
         }
 
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-        ImGuizmo::BeginFrame();
-
         glViewport(0, 0, viewport_w, viewport_h);
         glEnable(GL_DEPTH_TEST);
         glClearColor(0.90f, 0.92f, 0.96f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        ApplyPlaybackStep(&playback_state, &scene, dt_sec);
+        trajectory_player.AdvanceAndApply(&playback_state, &scene, dt_sec);
 
         scene.setFixedBaseMode(ui_state.lock_base);
         scene.updateTransforms();
+        CollisionMonitorResult collision_result = collision_monitor.Evaluate(collision_state, scene);
+        collision_monitor.UpdateStateFromResult(collision_result, &collision_state);
 
         glm::mat4 proj =
             glm::perspective(glm::radians(50.0f), static_cast<float>(viewport_w) / static_cast<float>(viewport_h), 0.05f, 80.0f);
@@ -733,6 +744,17 @@ int main(int argc, char** argv) {
                 applyIkForActiveChain(false, false, false);
             }
         }
+        if (collision_state.enable && collision_state.show_closest_pair_line && collision_state.has_valid_distance) {
+            glm::vec3 line_color(0.20f, 0.95f, 0.20f);
+            if (collision_state.nearest_surface_distance_m <= collision_state.danger_distance_m) {
+                line_color = glm::vec3(1.0f, 0.25f, 0.25f);
+            } else if (collision_state.nearest_surface_distance_m <= collision_state.warning_distance_m) {
+                line_color = glm::vec3(1.0f, 0.75f, 0.25f);
+            }
+            axis_vertices.push_back({collision_state.nearest_point_a, line_color});
+            axis_vertices.push_back({collision_state.nearest_point_b, line_color});
+        }
+
         line_renderer.draw(line_shader, axis_vertices, view, proj, ui_state.axis_line_width);
 
         glViewport(viewport_w, 0, panel_w, fb_h);
@@ -768,7 +790,7 @@ int main(int argc, char** argv) {
         ImGui::TextWrapped("URDF: %s", urdf_path.c_str());
         ImGui::TextDisabled("视角：左键旋转，中键/Shift+左键平移，右键拖动缩放，滚轮缩放");
         ImGui::Separator();
-        const char* sidebar_pages[] = {"场景", "IK", "回放", "关节", "TF"};
+        const char* sidebar_pages[] = {"场景", "IK", "回放", "安全", "关节", "TF"};
         ImGui::SetNextItemWidth(-1.0f);
         ImGui::Combo("子页", &ui_state.sidebar_page, sidebar_pages, IM_ARRAYSIZE(sidebar_pages));
         ImGui::Separator();
@@ -778,7 +800,7 @@ int main(int argc, char** argv) {
         }
 
         auto joints = scene.getJointInfos();
-        if (ui_state.sidebar_page == 3) {
+        if (ui_state.sidebar_page == 4) {
             RenderJointPanel(&ui_state, &scene, joints);
         }
 
@@ -942,10 +964,14 @@ int main(int argc, char** argv) {
         }
 
         if (ui_state.sidebar_page == 2) {
-            RenderPlaybackPanel(&playback_state, joints);
+            RenderPlaybackPanel(&playback_state, &trajectory_player, &scene, joints);
         }
 
-        if (ui_state.sidebar_page == 4) {
+        if (ui_state.sidebar_page == 3) {
+            RenderSafetyPanel(&collision_state, collision_result);
+        }
+
+        if (ui_state.sidebar_page == 5) {
             RenderTfPanel(&ui_state, scene.getLinkTfInfos());
         }
 

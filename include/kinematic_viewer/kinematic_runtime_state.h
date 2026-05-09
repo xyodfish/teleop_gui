@@ -32,7 +32,7 @@ struct ViewerState {
     char tf_filter[128]        = {0};
     int selected_joint         = -1;
     std::unordered_map<std::string, float> pose_snapshot;
-    int sidebar_page = 3;  // 0:场景 1:IK 2:回放 3:关节 4:TF
+    int sidebar_page = 4;  // 0:场景 1:IK 2:回放 3:安全 4:关节 5:TF
 };
 
 struct IkState {
@@ -103,11 +103,44 @@ struct PoseKeyframe {
 };
 
 struct DebugPlaybackState {
+    enum class Mode {
+        Stopped = 0,
+        Playing = 1,
+        Paused  = 2,
+    };
+
     std::vector<PoseKeyframe> keyframes;
-    bool playing     = false;
-    bool loop        = true;
-    float play_speed = 1.0f;
-    float play_time  = 0.0f;
+    Mode mode                    = Mode::Stopped;
+    bool loop                    = true;
+    float play_speed             = 1.0f;
+    float play_time              = 0.0f;
+    float keyframe_interval_sec  = 1.0f;
+    int selected_keyframe_index  = -1;
+    int current_segment_index    = -1;
+    bool timeline_edited_this_ui = false;
+    char trajectory_file_path[512] = "config/trajectory_playback_demo.yaml";
+    char trajectory_browser_dir[512] = "";
+    std::string trajectory_io_status;
+    bool trajectory_alert_popup_pending = false;
+    std::string trajectory_alert_message;
+    std::string trajectory_alert_detail;
+};
+
+struct CollisionMonitorState {
+    bool enable                   = true;
+    bool ignore_same_link         = true;
+    bool ignore_parent_child      = true;
+    bool show_closest_pair_line   = true;
+    float warning_distance_m      = 0.08f;
+    float danger_distance_m       = 0.03f;
+    bool has_valid_distance       = false;
+    std::string nearest_link_a;
+    std::string nearest_link_b;
+    float nearest_surface_distance_m = 0.0f;
+    float nearest_center_distance_m  = 0.0f;
+    glm::vec3 nearest_point_a        = glm::vec3(0.0f);
+    glm::vec3 nearest_point_b        = glm::vec3(0.0f);
+    int evaluated_pair_count         = 0;
 };
 
 }  // namespace kinematic_viewer

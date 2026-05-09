@@ -1,0 +1,12 @@
+trajectory:
+  version: 2
+  format: compact
+  joints: [right_arm_joint1, right_arm_joint2, right_arm_joint3, right_arm_joint4, right_arm_joint5, right_arm_joint6, right_arm_joint7, left_arm_joint1, left_arm_joint2, left_arm_joint3, left_arm_joint4, left_arm_joint5, left_arm_joint6, left_arm_joint7]
+  t0: 0.0
+  dt: 0.6
+  values:
+    - [0.00, -0.20, 0.10, -0.15, 0.00, 0.20, 0.00,  0.00, 0.20, -0.10, 0.15, 0.00, -0.20, 0.00]
+    - [0.18, -0.32, 0.20, -0.05, 0.12, 0.28, 0.10, -0.18, 0.32, -0.20, 0.05, -0.12, -0.28, -0.10]
+    - [0.30, -0.12, 0.05,  0.10, 0.20, 0.10, 0.15, -0.30, 0.12, -0.05, -0.10, -0.20, -0.10, -0.15]
+    - [0.12,  0.08, -0.10, 0.22, 0.10, -0.08, 0.05, -0.12, -0.08, 0.10, -0.22, -0.10, 0.08, -0.05]
+    - [0.00, -0.20, 0.10, -0.15, 0.00, 0.20, 0.00,  0.00, 0.20, -0.10, 0.15, 0.00, -0.20, 0.00]

@@ -214,6 +214,8 @@ struct LinkVisual {
 
     Model model;
     bool loaded = false;
+    glm::vec3 local_bounding_center = glm::vec3(0.0f);
+    float local_bounding_radius = 0.0f;
 };
 
 struct JointState {
@@ -247,6 +249,35 @@ struct RobotScene::Impl {
     urdf::ModelInterfaceSharedPtr urdf_model;
 
     bool fixed_base_mode = true;
+
+    void computeBoundingSphere(LinkVisual* visual) const {
+        if (visual == nullptr) {
+            return;
+        }
+        glm::vec3 min_v(1e9f);
+        glm::vec3 max_v(-1e9f);
+        bool has_vertex = false;
+        for (const auto& mesh : visual->model.meshes) {
+            for (const auto& vertex : mesh.vertices) {
+                min_v      = glm::min(min_v, vertex.position);
+                max_v      = glm::max(max_v, vertex.position);
+                has_vertex = true;
+            }
+        }
+        if (!has_vertex) {
+            visual->local_bounding_center = glm::vec3(0.0f);
+            visual->local_bounding_radius = 0.0f;
+            return;
+        }
+        visual->local_bounding_center = 0.5f * (min_v + max_v);
+        float radius                  = 0.0f;
+        for (const auto& mesh : visual->model.meshes) {
+            for (const auto& vertex : mesh.vertices) {
+                radius = std::max(radius, glm::length(vertex.position - visual->local_bounding_center));
+            }
+        }
+        visual->local_bounding_radius = radius;
+    }
 
     std::string resolvePath(const std::string& path) const {
         if (path.empty()) {
@@ -418,6 +449,7 @@ bool RobotScene::loadURDF(const std::string& urdf_path) {
             if (!lv.mesh_file.empty()) {
                 lv.model.loadAssimp(lv.mesh_file);
                 lv.loaded = true;
+                impl_->computeBoundingSphere(&lv);
             }
 
             std::string visual_name = link->name;
@@ -682,6 +714,35 @@ std::vector<RobotScene::LinkTfInfo> RobotScene::getLinkTfInfos() const {
     return infos;
 }
 
+std::vector<RobotScene::LinkCollisionProxy> RobotScene::getLinkCollisionProxies() const {
+    std::vector<LinkCollisionProxy> proxies;
+    proxies.reserve(impl_->visuals.size());
+
+    for (const auto& [visual_name, visual] : impl_->visuals) {
+        if (!visual.loaded || visual.local_bounding_radius <= 1e-6f) {
+            continue;
+        }
+
+        const auto link_it = impl_->transforms.find(visual.parent_link_name);
+        if (link_it == impl_->transforms.end()) {
+            continue;
+        }
+
+        glm::mat4 proxy_transform = link_it->second * visual.local_transform;
+        proxy_transform = proxy_transform * glm::scale(glm::mat4(1.0f), visual.scale);
+        const glm::vec3 world_center = glm::vec3(proxy_transform * glm::vec4(visual.local_bounding_center, 1.0f));
+        const float scale_factor = std::max(std::max(std::fabs(visual.scale.x), std::fabs(visual.scale.y)), std::fabs(visual.scale.z));
+
+        LinkCollisionProxy proxy;
+        proxy.link_name = visual.parent_link_name;
+        proxy.visual_name = visual_name;
+        proxy.world_center = world_center;
+        proxy.radius_m = std::max(0.0f, visual.local_bounding_radius * scale_factor);
+        proxies.push_back(std::move(proxy));
+    }
+    return proxies;
+}
+
 bool RobotScene::getLinkWorldTransform(const std::string& link_name, glm::mat4* out_world_transform) const {
     if (out_world_transform == nullptr) {
         return false;
@@ -691,6 +752,18 @@ bool RobotScene::getLinkWorldTransform(const std::string& link_name, glm::mat4* 
         return false;
     }
     *out_world_transform = it->second;
+    return true;
+}
+
+bool RobotScene::getLinkParentName(const std::string& link_name, std::string* out_parent_name) const {
+    if (out_parent_name == nullptr) {
+        return false;
+    }
+    auto it = impl_->link_parent.find(link_name);
+    if (it == impl_->link_parent.end()) {
+        return false;
+    }
+    *out_parent_name = it->second;
     return true;
 }
 
