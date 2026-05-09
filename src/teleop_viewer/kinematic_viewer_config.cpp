@@ -76,6 +76,7 @@ void ValidateTopLevelKeys(const YAML::Node& root) {
         "camera",
         "ui",
         "ik",
+        "ros",
     };
 
     std::vector<std::string> unknown;
@@ -139,6 +140,7 @@ KinematicViewerConfig KinematicViewerConfig::LoadFromFile(const std::string& yam
         ReadScalar(root["ik"], "full_body_backend", cfg.ik.full_body_backend);
         ReadScalar(root["ik"], "full_body_iterations", cfg.ik.full_body_iterations);
         ReadIkChainList(root["ik"], "chains", cfg.ik.chains);
+        ReadScalar(root["ros"], "enable", cfg.ros.enable);
 
         ok = true;
     } catch (const std::exception& e) {

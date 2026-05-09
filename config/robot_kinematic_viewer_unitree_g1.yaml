@@ -25,6 +25,9 @@ ui:
   cjk_font_path: ""
   cjk_font_size: 18.0
 
+ros:
+  enable: false
+
 ik:
   mode: "full_body" # single_chain | full_body
   full_body_backend: "wbc_chain_ik" # flex_ik | wbc_chain_ik

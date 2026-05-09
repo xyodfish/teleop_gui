@@ -332,6 +332,64 @@ void main() {
                   << "Please set ui.cjk_font_path in config." << std::endl;
     }
 
+    void applyKinematicUiStyle() {
+        ImGui::StyleColorsDark();
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.WindowRounding    = 10.0f;
+        style.ChildRounding     = 8.0f;
+        style.PopupRounding     = 8.0f;
+        style.FrameRounding     = 8.0f;
+        style.GrabRounding      = 8.0f;
+        style.ScrollbarRounding = 10.0f;
+        style.TabRounding       = 8.0f;
+        style.WindowPadding     = ImVec2(12.0f, 10.0f);
+        style.FramePadding      = ImVec2(10.0f, 7.0f);
+        style.ItemSpacing       = ImVec2(9.0f, 8.0f);
+        style.ItemInnerSpacing  = ImVec2(8.0f, 6.0f);
+        style.IndentSpacing     = 18.0f;
+        style.WindowBorderSize  = 1.0f;
+        style.ChildBorderSize   = 1.0f;
+        style.FrameBorderSize   = 1.0f;
+        style.ScrollbarSize     = 15.0f;
+        style.GrabMinSize       = 12.0f;
+
+        ImVec4* colors = style.Colors;
+        colors[ImGuiCol_WindowBg]             = ImVec4(0.08f, 0.10f, 0.13f, 1.00f);
+        colors[ImGuiCol_ChildBg]              = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
+        colors[ImGuiCol_PopupBg]              = ImVec4(0.11f, 0.13f, 0.17f, 0.98f);
+        colors[ImGuiCol_Border]               = ImVec4(0.27f, 0.33f, 0.40f, 0.90f);
+        colors[ImGuiCol_BorderShadow]         = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+        colors[ImGuiCol_Text]                 = ImVec4(0.92f, 0.95f, 0.98f, 1.00f);
+        colors[ImGuiCol_TextDisabled]         = ImVec4(0.58f, 0.64f, 0.71f, 1.00f);
+        colors[ImGuiCol_TitleBg]              = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
+        colors[ImGuiCol_TitleBgActive]        = ImVec4(0.13f, 0.18f, 0.24f, 1.00f);
+        colors[ImGuiCol_FrameBg]              = ImVec4(0.14f, 0.18f, 0.24f, 1.00f);
+        colors[ImGuiCol_FrameBgHovered]       = ImVec4(0.19f, 0.28f, 0.40f, 1.00f);
+        colors[ImGuiCol_FrameBgActive]        = ImVec4(0.22f, 0.35f, 0.50f, 1.00f);
+        colors[ImGuiCol_Button]               = ImVec4(0.18f, 0.30f, 0.44f, 0.85f);
+        colors[ImGuiCol_ButtonHovered]        = ImVec4(0.23f, 0.41f, 0.60f, 1.00f);
+        colors[ImGuiCol_ButtonActive]         = ImVec4(0.28f, 0.49f, 0.70f, 1.00f);
+        colors[ImGuiCol_Header]               = ImVec4(0.18f, 0.30f, 0.44f, 0.70f);
+        colors[ImGuiCol_HeaderHovered]        = ImVec4(0.23f, 0.41f, 0.60f, 0.88f);
+        colors[ImGuiCol_HeaderActive]         = ImVec4(0.28f, 0.49f, 0.70f, 1.00f);
+        colors[ImGuiCol_CheckMark]            = ImVec4(0.41f, 0.74f, 1.00f, 1.00f);
+        colors[ImGuiCol_SliderGrab]           = ImVec4(0.37f, 0.69f, 0.97f, 1.00f);
+        colors[ImGuiCol_SliderGrabActive]     = ImVec4(0.46f, 0.79f, 1.00f, 1.00f);
+        colors[ImGuiCol_ResizeGrip]           = ImVec4(0.36f, 0.62f, 0.87f, 0.35f);
+        colors[ImGuiCol_ResizeGripHovered]    = ImVec4(0.41f, 0.74f, 1.00f, 0.75f);
+        colors[ImGuiCol_ResizeGripActive]     = ImVec4(0.47f, 0.81f, 1.00f, 1.00f);
+        colors[ImGuiCol_Separator]            = ImVec4(0.27f, 0.33f, 0.40f, 0.95f);
+        colors[ImGuiCol_TableHeaderBg]        = ImVec4(0.13f, 0.19f, 0.27f, 1.00f);
+        colors[ImGuiCol_TableBorderStrong]    = ImVec4(0.29f, 0.36f, 0.44f, 1.00f);
+        colors[ImGuiCol_TableBorderLight]     = ImVec4(0.20f, 0.26f, 0.33f, 1.00f);
+        colors[ImGuiCol_TableRowBg]           = ImVec4(0.10f, 0.12f, 0.16f, 0.45f);
+        colors[ImGuiCol_TableRowBgAlt]        = ImVec4(0.12f, 0.15f, 0.20f, 0.65f);
+        colors[ImGuiCol_ScrollbarBg]          = ImVec4(0.10f, 0.12f, 0.16f, 1.00f);
+        colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.30f, 0.39f, 0.48f, 0.95f);
+        colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.39f, 0.51f, 0.62f, 0.95f);
+        colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.49f, 0.63f, 0.75f, 1.00f);
+    }
+
     glm::mat4 markerWorldMatrix(const glm::vec3& pos, const glm::vec3& rpyDeg) {
         glm::mat4 m = glm::translate(glm::mat4(1.0f), pos);
         m           = m * glm::rotate(glm::mat4(1.0f), glm::radians(rpyDeg[0]), glm::vec3(1.0f, 0.0f, 0.0f));
@@ -412,13 +470,68 @@ void main() {
         return glm::length(p - proj);
     }
 
+    class KinematicRosBridge {
+       public:
+        explicit KinematicRosBridge(bool enabled) : enabled_(enabled) {}
+
+        bool initialize(int argc, char** argv) {
+            if (!enabled_) {
+                return true;
+            }
+            if (!ros::isInitialized()) {
+                ros::init(argc, argv, "robot_kinematic_viewer", ros::init_options::AnonymousName | ros::init_options::NoSigintHandler);
+            }
+            node_handle_ = std::make_unique<ros::NodeHandle>("~");
+            return true;
+        }
+
+        bool enabled() const {
+            return enabled_;
+        }
+
+        void spinOnce() const {
+            if (enabled_ && ros::ok()) {
+                ros::spinOnce();
+            }
+        }
+
+        template <typename T>
+        bool getParam(const std::string& key, T* out) const {
+            if (!enabled_ || node_handle_ == nullptr || out == nullptr) {
+                return false;
+            }
+            return node_handle_->getParam(key, *out);
+        }
+
+        template <typename T>
+        void param(const std::string& key, T* value, const T& default_value) const {
+            if (value == nullptr) {
+                return;
+            }
+            if (!enabled_ || node_handle_ == nullptr) {
+                *value = default_value;
+                return;
+            }
+            node_handle_->param<T>(key, *value, default_value);
+        }
+
+        template <typename Callback>
+        void subscribeExternalTarget(const std::string& topic, uint32_t queue_size, Callback&& callback) {
+            if (!enabled_ || node_handle_ == nullptr) {
+                return;
+            }
+            external_target_sub_ = node_handle_->subscribe<geometry_msgs::PoseStamped>(topic, queue_size, std::forward<Callback>(callback));
+        }
+
+       private:
+        bool enabled_ = true;
+        std::unique_ptr<ros::NodeHandle> node_handle_;
+        ros::Subscriber external_target_sub_;
+    };
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (!ros::isInitialized()) {
-        ros::init(argc, argv, "robot_kinematic_viewer", ros::init_options::AnonymousName | ros::init_options::NoSigintHandler);
-    }
-
     std::string config_or_urdf = getUrdfPathFromArgs(argc, argv);
     const bool is_urdf_input   = config_or_urdf.size() > 5 && config_or_urdf.substr(config_or_urdf.size() - 5) == ".urdf";
     KinematicViewerConfig cfg;
@@ -463,7 +576,7 @@ int main(int argc, char** argv) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     setupFonts(cfg);
-    ImGui::StyleColorsDark();
+    applyKinematicUiStyle();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
@@ -494,17 +607,19 @@ int main(int argc, char** argv) {
     ui_state.lock_base = cfg.ui.fix_base_like_mujoco;
     scene.setFixedBaseMode(ui_state.lock_base);
 
-    ros::NodeHandle ros_nh_private("~");
+    KinematicRosBridge ros_bridge(cfg.ros.enable);
+    ros_bridge.initialize(argc, argv);
+
     std::string ikModeParam;
     std::string fullBodyBackendParam;
     int fullBodyIterationsParam = cfg.ik.full_body_iterations;
-    if (ros_nh_private.getParam("ik_mode", ikModeParam)) {
+    if (ros_bridge.getParam("ik_mode", &ikModeParam)) {
         cfg.ik.mode = ikModeParam;
     }
-    if (ros_nh_private.getParam("ik_full_body_backend", fullBodyBackendParam)) {
+    if (ros_bridge.getParam("ik_full_body_backend", &fullBodyBackendParam)) {
         cfg.ik.full_body_backend = fullBodyBackendParam;
     }
-    if (ros_nh_private.getParam("ik_full_body_iterations", fullBodyIterationsParam)) {
+    if (ros_bridge.getParam("ik_full_body_iterations", &fullBodyIterationsParam)) {
         cfg.ik.full_body_iterations = std::max(1, fullBodyIterationsParam);
     }
 
@@ -530,22 +645,24 @@ int main(int argc, char** argv) {
         for (int i = 0; i < ik_state.solver.chainCount(); ++i) {
             ik_state.chains.push_back(ik_state.solver.chainStatus(i));
         }
-        ros_nh_private.param<int>("ik_selected_chain", ik_state.selected_chain, ik_state.selected_chain);
+        ros_bridge.param<int>("ik_selected_chain", &ik_state.selected_chain, ik_state.selected_chain);
         if (!ik_state.chains.empty()) {
             ik_state.selected_chain = std::clamp(ik_state.selected_chain, 0, static_cast<int>(ik_state.chains.size()) - 1);
         }
         ik_state.marker_targets.resize(ik_state.chains.size());
     }
 
-    ros_nh_private.param<std::string>("ik_target_pose_topic", ik_state.external_target_topic, ik_state.external_target_topic);
-    ros_nh_private.param<std::string>("ik_target_pose_frame", ik_state.external_target_expected_frame,
-                                      ik_state.external_target_expected_frame);
-    ros_nh_private.param<bool>("enable_external_ik_target", ik_state.use_external_target, ik_state.use_external_target);
-    ros_nh_private.param<bool>("external_ik_target_position_only", ik_state.external_target_position_only,
-                               ik_state.external_target_position_only);
+    ros_bridge.param<std::string>("ik_target_pose_topic", &ik_state.external_target_topic, ik_state.external_target_topic);
+    ros_bridge.param<std::string>("ik_target_pose_frame", &ik_state.external_target_expected_frame,
+                                  ik_state.external_target_expected_frame);
+    ros_bridge.param<bool>("enable_external_ik_target", &ik_state.use_external_target, ik_state.use_external_target);
+    ros_bridge.param<bool>("external_ik_target_position_only", &ik_state.external_target_position_only,
+                           ik_state.external_target_position_only);
+    if (!ros_bridge.enabled()) {
+        ik_state.use_external_target = false;
+    }
 
-    ros::Subscriber external_target_sub = ros_nh_private.subscribe<geometry_msgs::PoseStamped>(
-        ik_state.external_target_topic, 20, [&](const geometry_msgs::PoseStamped::ConstPtr& msg) {
+    ros_bridge.subscribeExternalTarget(ik_state.external_target_topic, 20, [&](const geometry_msgs::PoseStamped::ConstPtr& msg) {
             if (msg == nullptr) {
                 return;
             }
@@ -568,7 +685,6 @@ int main(int argc, char** argv) {
             ik_state.external_target_received      = true;
             ik_state.external_target_dirty         = true;
         });
-    (void)external_target_sub;
 
     double prev_x         = 0.0;
     double prev_y         = 0.0;
@@ -624,9 +740,7 @@ int main(int argc, char** argv) {
     }
 
     while (!glfwWindowShouldClose(window)) {
-        if (ros::ok()) {
-            ros::spinOnce();
-        }
+        ros_bridge.spinOnce();
         glfwPollEvents();
         double now_sec = glfwGetTime();
         double dt_sec  = std::max(0.0, now_sec - last_frame_sec);
@@ -1355,7 +1469,9 @@ int main(int argc, char** argv) {
             } else {
                 ImGui::TextDisabled("外部位姿frame过滤: <未设置>");
             }
-            if (ik_state.external_target_received) {
+            if (!ros_bridge.enabled()) {
+                ImGui::TextDisabled("外部位姿: ROS 未启用");
+            } else if (ik_state.external_target_received) {
                 double now_ros_sec = ros::Time::now().toSec();
                 double age_sec     = std::max(0.0, now_ros_sec - ik_state.external_target_last_recv_sec);
                 ImGui::Text("外部位姿: 已接收, frame=%s, %.2fs前",
