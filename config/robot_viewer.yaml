@@ -69,6 +69,10 @@ ik:
     - label: "右臂"
       base_link: "torso_base_link"
       tip_link: "right_arm_end_effector_mount_link"
+      base_link_candidates: ["torso_base_link", "torso_link", "pelvis"]
+      tip_link_candidates: ["right_arm_end_effector_mount_link", "right_rubber_hand", "right_wrist_yaw_link"]
     - label: "左臂"
       base_link: "torso_base_link"
       tip_link: "left_arm_end_effector_mount_link"
+      base_link_candidates: ["torso_base_link", "torso_link", "pelvis"]
+      tip_link_candidates: ["left_arm_end_effector_mount_link", "left_rubber_hand", "left_wrist_yaw_link"]

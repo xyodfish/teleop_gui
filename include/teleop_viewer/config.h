@@ -89,6 +89,8 @@ struct ViewerIkChainConfig {
     std::string label = "";
     std::string base_link = "";
     std::string tip_link = "";
+    std::vector<std::string> base_link_candidates;
+    std::vector<std::string> tip_link_candidates;
 };
 
 struct ViewerIkConfig {

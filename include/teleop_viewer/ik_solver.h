@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace omnilink::teleop_viewer {
@@ -72,6 +73,11 @@ namespace omnilink::teleop_viewer {
         static flex_ik::SE3 glmToFlexSe3(const glm::mat4& transform);
 
         bool initializeFullBodySolvers(const std::string& urdfPath, const std::vector<ViewerIkChainConfig>& chains);
+        bool loadUrdfLinkNames(const std::string& urdfPath, std::unordered_set<std::string>* linkNames, std::string* errorText) const;
+        bool pickFirstExisting(const std::vector<std::string>& candidates, const std::unordered_set<std::string>& linkNames,
+                               std::string* resolvedLink) const;
+        ViewerIkChainConfig resolveChainConfigFromUrdf(const ViewerIkChainConfig& config, const std::unordered_set<std::string>& linkNames,
+                                                       bool* resolved, std::string* reason) const;
         flex_ik::Vector buildFullBodyQFromScene(const RobotScene& scene) const;
         void applyFullBodyQToScene(RobotScene* scene, const flex_ik::Vector& q) const;
         flex_ik::Vector limitFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode,

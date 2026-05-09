@@ -151,6 +151,7 @@ cd teleop_gui_release
 - `ik.mode`：IK 求解模式，`single_chain`（单链）或 `full_body`（全身多链约束）
 - `ik.full_body_iterations`：`full_body` 下每次求解的迭代轮次
 - `ik.chains`：IK 链配置列表（`label/base_link/tip_link`）
+- `ik.chains[].base_link_candidates` / `ik.chains[].tip_link_candidates`：可选候选 link 列表；程序会结合 URDF 自动选取首个存在的 link
 - `omnilink_bridge.enable`：是否启用桥接控制
 - `omnilink_bridge.rc_virtual_joy_topic`：RC 控制下发 topic
 - `omnilink_bridge.wbc_info_topic` / `error_topic`：WBC 与错误通道

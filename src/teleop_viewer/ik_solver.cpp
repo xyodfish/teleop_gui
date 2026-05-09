@@ -3,9 +3,12 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp>
+#include <urdf_parser/urdf_parser.h>
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 
@@ -23,18 +26,136 @@ namespace omnilink::teleop_viewer {
         return fullBodyBackend_;
     }
 
+    bool IkSolver::loadUrdfLinkNames(const std::string& urdfPath, std::unordered_set<std::string>* linkNames, std::string* errorText) const {
+        if (linkNames == nullptr) {
+            if (errorText) {
+                *errorText = "输出参数为空";
+            }
+            return false;
+        }
+        linkNames->clear();
+
+        std::ifstream file(urdfPath);
+        if (!file) {
+            if (errorText) {
+                *errorText = "无法打开URDF: " + urdfPath;
+            }
+            return false;
+        }
+        const std::string xml((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        auto model = urdf::parseURDF(xml);
+        if (!model) {
+            if (errorText) {
+                *errorText = "URDF解析失败: " + urdfPath;
+            }
+            return false;
+        }
+        for (const auto& kv : model->links_) {
+            linkNames->insert(kv.first);
+        }
+        if (linkNames->empty()) {
+            if (errorText) {
+                *errorText = "URDF中未找到link定义";
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool IkSolver::pickFirstExisting(const std::vector<std::string>& candidates, const std::unordered_set<std::string>& linkNames,
+                                     std::string* resolvedLink) const {
+        for (const auto& name : candidates) {
+            if (name.empty()) {
+                continue;
+            }
+            if (linkNames.find(name) == linkNames.end()) {
+                continue;
+            }
+            if (resolvedLink != nullptr) {
+                *resolvedLink = name;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    ViewerIkChainConfig IkSolver::resolveChainConfigFromUrdf(const ViewerIkChainConfig& config,
+                                                              const std::unordered_set<std::string>& linkNames, bool* resolved,
+                                                              std::string* reason) const {
+        ViewerIkChainConfig out = config;
+
+        bool baseOk = !out.base_link.empty() && linkNames.find(out.base_link) != linkNames.end();
+        if (!baseOk) {
+            baseOk = pickFirstExisting(config.base_link_candidates, linkNames, &out.base_link);
+        }
+
+        bool tipOk = !out.tip_link.empty() && linkNames.find(out.tip_link) != linkNames.end();
+        if (!tipOk) {
+            tipOk = pickFirstExisting(config.tip_link_candidates, linkNames, &out.tip_link);
+        }
+
+        if (resolved != nullptr) {
+            *resolved = baseOk && tipOk;
+        }
+        if (reason != nullptr && (!baseOk || !tipOk)) {
+            std::ostringstream oss;
+            if (!baseOk) {
+                oss << "base_link不可解析";
+            }
+            if (!tipOk) {
+                if (!oss.str().empty()) {
+                    oss << ", ";
+                }
+                oss << "tip_link不可解析";
+            }
+            *reason = oss.str();
+        }
+        return out;
+    }
+
     bool IkSolver::initialize(const std::string& urdfPath, const std::vector<ViewerIkChainConfig>& chains) {
         chains_.clear();
         chains_.reserve(chains.size());
+        std::vector<ViewerIkChainConfig> fullBodyChains;
+        fullBodyChains.reserve(chains.size());
+
+        std::unordered_set<std::string> urdfLinkNames;
+        std::string urdfLinkLoadError;
+        const bool hasUrdfLinkNames = loadUrdfLinkNames(urdfPath, &urdfLinkNames, &urdfLinkLoadError);
 
         for (const auto& chain : chains) {
+            ViewerIkChainConfig resolvedChain = chain;
+            if (hasUrdfLinkNames) {
+                bool chainResolved    = false;
+                std::string unresolvedReason;
+                resolvedChain = resolveChainConfigFromUrdf(chain, urdfLinkNames, &chainResolved, &unresolvedReason);
+                if (!chainResolved) {
+                    IkChainRuntime runtime;
+                    runtime.status.config = resolvedChain;
+                    runtime.status.ready  = false;
+                    runtime.status.error  = "IK链配置无效（未在URDF中解析到base/tip）: " + unresolvedReason;
+                    chains_.push_back(std::move(runtime));
+                    continue;
+                }
+            }
+
+            if (resolvedChain.base_link.empty() || resolvedChain.tip_link.empty()) {
+                IkChainRuntime runtime;
+                runtime.status.config = resolvedChain;
+                runtime.status.ready  = false;
+                runtime.status.error  = "IK链配置缺失base_link或tip_link";
+                chains_.push_back(std::move(runtime));
+                continue;
+            }
+
             IkChainRuntime runtime;
-            runtime.status.config = chain;
-            runtime.solver = std::make_unique<TRAC_IK::TRAC_IK>(chain.base_link, chain.tip_link, urdfPath, 200, 0.005, 1e-5, 1, false,
-                                                                false, TRAC_IK::Speed);
+            runtime.status.config = resolvedChain;
+            runtime.solver =
+                std::make_unique<TRAC_IK::TRAC_IK>(resolvedChain.base_link, resolvedChain.tip_link, urdfPath, 200, 0.005, 1e-5, 1, false,
+                                                   false, TRAC_IK::Speed);
             if (!runtime.solver->getKDLChain(runtime.chain) || !runtime.solver->getKDLLimits(runtime.lower, runtime.upper)) {
                 runtime.status.ready = false;
-                runtime.status.error = "TRAC-IK 初始化失败: " + chain.base_link + " -> " + chain.tip_link;
+                runtime.status.error = "TRAC-IK 初始化失败: " + resolvedChain.base_link + " -> " + resolvedChain.tip_link;
                 chains_.push_back(std::move(runtime));
                 continue;
             }
@@ -57,10 +178,19 @@ namespace omnilink::teleop_viewer {
 
             runtime.status.ready = true;
             runtime.status.error.clear();
+            fullBodyChains.push_back(runtime.status.config);
             chains_.push_back(std::move(runtime));
         }
 
-        initializeFullBodySolvers(urdfPath, chains);
+        if (fullBodyChains.empty() && !hasUrdfLinkNames && !urdfLinkLoadError.empty()) {
+            for (auto& chainRuntime : chains_) {
+                if (chainRuntime.status.error.empty()) {
+                    chainRuntime.status.error = "URDF link解析失败: " + urdfLinkLoadError;
+                }
+            }
+        }
+
+        initializeFullBodySolvers(urdfPath, fullBodyChains);
         return !chains_.empty();
     }
 

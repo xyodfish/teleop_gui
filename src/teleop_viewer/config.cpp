@@ -35,6 +35,18 @@ void ReadStringList(const YAML::Node& node, const char* key, std::vector<std::st
     }
 }
 
+void ReadStringListFromItem(const YAML::Node& item, const char* key, std::vector<std::string>& out) {
+    if (!item || !item[key] || !item[key].IsSequence()) {
+        return;
+    }
+    out.clear();
+    for (const auto& entry : item[key]) {
+        if (entry.IsScalar()) {
+            out.push_back(entry.as<std::string>());
+        }
+    }
+}
+
 void ReadIkChainList(const YAML::Node& node, const char* key, std::vector<ViewerIkChainConfig>& out) {
     if (!node || !node[key] || !node[key].IsSequence()) {
         return;
@@ -48,7 +60,11 @@ void ReadIkChainList(const YAML::Node& node, const char* key, std::vector<Viewer
         ReadScalar(item, "label", chain.label);
         ReadScalar(item, "base_link", chain.base_link);
         ReadScalar(item, "tip_link", chain.tip_link);
-        if (!chain.base_link.empty() && !chain.tip_link.empty()) {
+        ReadStringListFromItem(item, "base_link_candidates", chain.base_link_candidates);
+        ReadStringListFromItem(item, "tip_link_candidates", chain.tip_link_candidates);
+        const bool hasBaseSelector = !chain.base_link.empty() || !chain.base_link_candidates.empty();
+        const bool hasTipSelector  = !chain.tip_link.empty() || !chain.tip_link_candidates.empty();
+        if (hasBaseSelector && hasTipSelector) {
             parsed.push_back(std::move(chain));
         }
     }
