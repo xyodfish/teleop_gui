@@ -80,8 +80,12 @@ namespace omnilink::teleop_viewer {
                                                        bool* resolved, std::string* reason) const;
         flex_ik::Vector buildFullBodyQFromScene(const RobotScene& scene) const;
         void applyFullBodyQToScene(RobotScene* scene, const flex_ik::Vector& q) const;
+        flex_ik::Vector buildWbcFullBodyQFromScene(const RobotScene& scene) const;
+        void applyWbcFullBodyQToScene(RobotScene* scene, const flex_ik::Vector& q) const;
         flex_ik::Vector limitFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode,
-                                           bool positionOnlyMode) const;
+                                          bool positionOnlyMode) const;
+        flex_ik::Vector limitWbcFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode,
+                                             bool positionOnlyMode) const;
 
         std::vector<IkChainRuntime> chains_;
         std::unique_ptr<flex_ik::FlexIk> fullBodySolverPose_;
@@ -95,6 +99,13 @@ namespace omnilink::teleop_viewer {
         std::string fullBodyBackend_ = "flex_ik";
         std::unordered_map<std::string, int> fullBodyJointQIndex_;
         std::vector<int> fullBodyLockedVIndex_;
+        std::unordered_map<std::string, int> fullBodyWbcJointQIndex_;
+        std::vector<int> fullBodyWbcLockedVIndex_;
+        std::vector<int> fullBodyWbcPlanarBaseVIndex_;
+        int fullBodyWbcBaseXQIndex_    = -1;
+        int fullBodyWbcBaseYQIndex_    = -1;
+        int fullBodyWbcBaseYawQIndex_  = -1;
+        bool fullBodyWbcHasPlanarBase_ = false;
     };
 
 }  // namespace omnilink::teleop_viewer

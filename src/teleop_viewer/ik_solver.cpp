@@ -1,9 +1,12 @@
 #include "teleop_viewer/ik_solver.h"
 
+#include <urdf_parser/urdf_parser.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <pinocchio/algorithm/joint-configuration.hpp>
-#include <urdf_parser/urdf_parser.h>
+#include <pinocchio/algorithm/model.hpp>
+#include <pinocchio/multibody/joint/joint-prismatic.hpp>
+#include <pinocchio/multibody/joint/joint-revolute.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +16,32 @@
 #include <stdexcept>
 
 namespace omnilink::teleop_viewer {
+    namespace {
+
+        pinocchio::Model BuildPlanarBaseModelForWbc(const pinocchio::Model& fixedModel, bool* hasPlanarBase) {
+            if (hasPlanarBase != nullptr) {
+                *hasPlanarBase = false;
+            }
+            if (fixedModel.existJointName("trans_x") || fixedModel.existJointName("trans_y") || fixedModel.existJointName("rot_z")) {
+                return fixedModel;
+            }
+
+            pinocchio::Model baseModel;
+            auto jx = baseModel.addJoint(0, pinocchio::JointModelPX(), pinocchio::SE3::Identity(), "trans_x");
+            auto jy = baseModel.addJoint(jx, pinocchio::JointModelPY(), pinocchio::SE3::Identity(), "trans_y");
+            auto jz = baseModel.addJoint(jy, pinocchio::JointModelRZ(), pinocchio::SE3::Identity(), "rot_z");
+            baseModel.addFrame(pinocchio::Frame("base_rz_frame", jz, jz, pinocchio::SE3::Identity(), pinocchio::OP_FRAME));
+
+            pinocchio::Model modelWithPlanarBase;
+            const pinocchio::FrameIndex fid = baseModel.getFrameId("base_rz_frame");
+            pinocchio::appendModel(baseModel, fixedModel, fid, pinocchio::SE3::Identity(), modelWithPlanarBase);
+            if (hasPlanarBase != nullptr) {
+                *hasPlanarBase = true;
+            }
+            return modelWithPlanarBase;
+        }
+
+    }  // namespace
 
     void IkSolver::setFullBodyBackend(const std::string& backendName) {
         if (backendName == "wbc_chain_ik") {
@@ -26,7 +55,8 @@ namespace omnilink::teleop_viewer {
         return fullBodyBackend_;
     }
 
-    bool IkSolver::loadUrdfLinkNames(const std::string& urdfPath, std::unordered_set<std::string>* linkNames, std::string* errorText) const {
+    bool IkSolver::loadUrdfLinkNames(const std::string& urdfPath, std::unordered_set<std::string>* linkNames,
+                                     std::string* errorText) const {
         if (linkNames == nullptr) {
             if (errorText) {
                 *errorText = "输出参数为空";
@@ -80,8 +110,8 @@ namespace omnilink::teleop_viewer {
     }
 
     ViewerIkChainConfig IkSolver::resolveChainConfigFromUrdf(const ViewerIkChainConfig& config,
-                                                              const std::unordered_set<std::string>& linkNames, bool* resolved,
-                                                              std::string* reason) const {
+                                                             const std::unordered_set<std::string>& linkNames, bool* resolved,
+                                                             std::string* reason) const {
         ViewerIkChainConfig out = config;
 
         bool baseOk = !out.base_link.empty() && linkNames.find(out.base_link) != linkNames.end();
@@ -126,7 +156,7 @@ namespace omnilink::teleop_viewer {
         for (const auto& chain : chains) {
             ViewerIkChainConfig resolvedChain = chain;
             if (hasUrdfLinkNames) {
-                bool chainResolved    = false;
+                bool chainResolved = false;
                 std::string unresolvedReason;
                 resolvedChain = resolveChainConfigFromUrdf(chain, urdfLinkNames, &chainResolved, &unresolvedReason);
                 if (!chainResolved) {
@@ -150,9 +180,8 @@ namespace omnilink::teleop_viewer {
 
             IkChainRuntime runtime;
             runtime.status.config = resolvedChain;
-            runtime.solver =
-                std::make_unique<TRAC_IK::TRAC_IK>(resolvedChain.base_link, resolvedChain.tip_link, urdfPath, 200, 0.005, 1e-5, 1, false,
-                                                   false, TRAC_IK::Speed);
+            runtime.solver = std::make_unique<TRAC_IK::TRAC_IK>(resolvedChain.base_link, resolvedChain.tip_link, urdfPath, 200, 0.005, 1e-5,
+                                                                1, false, false, TRAC_IK::Speed);
             if (!runtime.solver->getKDLChain(runtime.chain) || !runtime.solver->getKDLLimits(runtime.lower, runtime.upper)) {
                 runtime.status.ready = false;
                 runtime.status.error = "TRAC-IK 初始化失败: " + resolvedChain.base_link + " -> " + resolvedChain.tip_link;
@@ -360,6 +389,13 @@ namespace omnilink::teleop_viewer {
         fullBodyWbcSolverPosOnly_.reset();
         fullBodyJointQIndex_.clear();
         fullBodyLockedVIndex_.clear();
+        fullBodyWbcJointQIndex_.clear();
+        fullBodyWbcLockedVIndex_.clear();
+        fullBodyWbcPlanarBaseVIndex_.clear();
+        fullBodyWbcBaseXQIndex_   = -1;
+        fullBodyWbcBaseYQIndex_   = -1;
+        fullBodyWbcBaseYawQIndex_ = -1;
+        fullBodyWbcHasPlanarBase_ = false;
 
         try {
             fullBodySolverPose_    = std::make_unique<flex_ik::FlexIk>(urdfPath);
@@ -435,13 +471,63 @@ namespace omnilink::teleop_viewer {
         fullBodyFlexReady_ = true;
 
         try {
+            const pinocchio::Model wbcModel = BuildPlanarBaseModelForWbc(fullBodySolverPose_->model(), &fullBodyWbcHasPlanarBase_);
+            for (int j = 1; j < wbcModel.njoints; ++j) {
+                const std::string& jointName     = wbcModel.names[j];
+                const auto& joint                = wbcModel.joints[j];
+                const bool isScalarActuatedJoint = (joint.nq() == 1 && joint.nv() == 1);
+                if (!isScalarActuatedJoint) {
+                    const int idxV = joint.idx_v();
+                    for (int k = 0; k < joint.nv(); ++k) {
+                        const int vidx = idxV + k;
+                        if (vidx >= 0 && vidx < wbcModel.nv) {
+                            fullBodyWbcLockedVIndex_.push_back(vidx);
+                        }
+                    }
+                    continue;
+                }
+
+                const int idxQ = joint.idx_q();
+                if (idxQ >= 0 && idxQ < wbcModel.nq) {
+                    fullBodyWbcJointQIndex_[jointName] = idxQ;
+                }
+                if (fullBodyWbcHasPlanarBase_ && jointName == "trans_x") {
+                    fullBodyWbcBaseXQIndex_ = idxQ;
+                } else if (fullBodyWbcHasPlanarBase_ && jointName == "trans_y") {
+                    fullBodyWbcBaseYQIndex_ = idxQ;
+                } else if (fullBodyWbcHasPlanarBase_ && jointName == "rot_z") {
+                    fullBodyWbcBaseYawQIndex_ = idxQ;
+                }
+            }
+
+            if (fullBodyWbcHasPlanarBase_) {
+                auto appendPlanarBaseVIndex = [&](const std::string& jointName) {
+                    if (!wbcModel.existJointName(jointName)) {
+                        return;
+                    }
+                    const auto jid    = wbcModel.getJointId(jointName);
+                    const auto& joint = wbcModel.joints[jid];
+                    const int idxV    = joint.idx_v();
+                    for (int k = 0; k < joint.nv(); ++k) {
+                        const int vidx = idxV + k;
+                        if (vidx >= 0 && vidx < wbcModel.nv) {
+                            fullBodyWbcPlanarBaseVIndex_.push_back(vidx);
+                        }
+                    }
+                };
+                appendPlanarBaseVIndex("trans_x");
+                appendPlanarBaseVIndex("trans_y");
+                appendPlanarBaseVIndex("rot_z");
+            }
+
             std::vector<Wbc::Index> fixedJointV;
-            fixedJointV.reserve(fullBodyLockedVIndex_.size());
-            for (const int idx : fullBodyLockedVIndex_) {
+            fixedJointV.reserve(fullBodyWbcLockedVIndex_.size());
+            for (const int idx : fullBodyWbcLockedVIndex_) {
                 fixedJointV.push_back(static_cast<Wbc::Index>(idx));
             }
-            fullBodyWbcSolverPose_    = std::make_unique<Wbc::robot::ChainIkTrait>(fullBodySolverPose_->model(), fixedJointV);
-            fullBodyWbcSolverPosOnly_ = std::make_unique<Wbc::robot::ChainIkTrait>(fullBodySolverPose_->model(), fixedJointV);
+
+            fullBodyWbcSolverPose_    = std::make_unique<Wbc::robot::ChainIkTrait>(wbcModel, fixedJointV);
+            fullBodyWbcSolverPosOnly_ = std::make_unique<Wbc::robot::ChainIkTrait>(wbcModel, fixedJointV);
             for (const auto& chain : chains) {
                 std::array<bool, 6> poseMask = {true, true, true, true, true, true};
                 std::array<bool, 6> posMask  = {true, true, true, false, false, false};
@@ -502,6 +588,87 @@ namespace omnilink::teleop_viewer {
         scene->updateTransforms();
     }
 
+    flex_ik::Vector IkSolver::buildWbcFullBodyQFromScene(const RobotScene& scene) const {
+        if (fullBodyWbcSolverPose_ == nullptr) {
+            return flex_ik::Vector();
+        }
+        const int nq      = fullBodyWbcSolverPose_->qMin().size();
+        flex_ik::Vector q = flex_ik::Vector::Zero(nq);
+        if (fullBodyWbcSolverPose_->qMax().size() == nq) {
+            q = 0.5 * (fullBodyWbcSolverPose_->qMin() + fullBodyWbcSolverPose_->qMax());
+        }
+
+        const auto joints = scene.getJointInfos();
+        for (const auto& joint : joints) {
+            auto it = fullBodyWbcJointQIndex_.find(joint.name);
+            if (it == fullBodyWbcJointQIndex_.end()) {
+                continue;
+            }
+            const int idxQ = it->second;
+            if (idxQ < 0 || idxQ >= q.size()) {
+                continue;
+            }
+            q[idxQ] = static_cast<double>(joint.position);
+        }
+
+        if (fullBodyWbcHasPlanarBase_) {
+            float baseX   = 0.0f;
+            float baseY   = 0.0f;
+            float baseYaw = 0.0f;
+            if (scene.getVirtualBasePose2D(&baseX, &baseY, &baseYaw)) {
+                if (fullBodyWbcBaseXQIndex_ >= 0 && fullBodyWbcBaseXQIndex_ < q.size()) {
+                    q[fullBodyWbcBaseXQIndex_] = static_cast<double>(baseX);
+                }
+                if (fullBodyWbcBaseYQIndex_ >= 0 && fullBodyWbcBaseYQIndex_ < q.size()) {
+                    q[fullBodyWbcBaseYQIndex_] = static_cast<double>(baseY);
+                }
+                if (fullBodyWbcBaseYawQIndex_ >= 0 && fullBodyWbcBaseYawQIndex_ < q.size()) {
+                    q[fullBodyWbcBaseYawQIndex_] = static_cast<double>(baseYaw);
+                }
+            }
+        }
+        return q;
+    }
+
+    void IkSolver::applyWbcFullBodyQToScene(RobotScene* scene, const flex_ik::Vector& q) const {
+        if (scene == nullptr) {
+            return;
+        }
+        for (const auto& kv : fullBodyWbcJointQIndex_) {
+            if (kv.first == "trans_x" || kv.first == "trans_y" || kv.first == "rot_z") {
+                continue;
+            }
+            const int idxQ = kv.second;
+            if (idxQ < 0 || idxQ >= q.size()) {
+                continue;
+            }
+            RobotScene::JointInfo jointInfo;
+            const bool hasJointInfo = scene->getJointInfo(kv.first, &jointInfo);
+            float value             = static_cast<float>(q[idxQ]);
+            if (hasJointInfo && jointInfo.revolute) {
+                value = std::clamp(value, jointInfo.min_angle, jointInfo.max_angle);
+            }
+            scene->setJointPositionByName(kv.first, value);
+        }
+
+        if (fullBodyWbcHasPlanarBase_) {
+            float baseX   = 0.0f;
+            float baseY   = 0.0f;
+            float baseYaw = 0.0f;
+            if (fullBodyWbcBaseXQIndex_ >= 0 && fullBodyWbcBaseXQIndex_ < q.size()) {
+                baseX = static_cast<float>(q[fullBodyWbcBaseXQIndex_]);
+            }
+            if (fullBodyWbcBaseYQIndex_ >= 0 && fullBodyWbcBaseYQIndex_ < q.size()) {
+                baseY = static_cast<float>(q[fullBodyWbcBaseYQIndex_]);
+            }
+            if (fullBodyWbcBaseYawQIndex_ >= 0 && fullBodyWbcBaseYawQIndex_ < q.size()) {
+                baseYaw = static_cast<float>(q[fullBodyWbcBaseYawQIndex_]);
+            }
+            scene->setVirtualBasePose2D(baseX, baseY, baseYaw);
+        }
+        scene->updateTransforms();
+    }
+
     flex_ik::Vector IkSolver::limitFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode,
                                                 bool positionOnlyMode) const {
         flex_ik::Vector qOut = qCurrent;
@@ -512,9 +679,8 @@ namespace omnilink::teleop_viewer {
             return qOut;
         }
 
-        const auto& model = fullBodySolverPose_->model();
-        const double maxDelta =
-            fastMode ? (positionOnlyMode ? 0.25 : 0.18) : (positionOnlyMode ? 1.2 : 0.65);
+        const auto& model     = fullBodySolverPose_->model();
+        const double maxDelta = fastMode ? (positionOnlyMode ? 0.25 : 0.18) : (positionOnlyMode ? 1.2 : 0.65);
         for (const auto& kv : fullBodyJointQIndex_) {
             const int idxQ = kv.second;
             if (idxQ < 0 || idxQ >= qSolved.size() || idxQ >= qCurrent.size()) {
@@ -543,6 +709,54 @@ namespace omnilink::teleop_viewer {
             const double delta         = std::clamp(boundedTarget - current, -maxDelta, maxDelta);
             qOut[idxQ]                 = current + delta;
         }
+        return qOut;
+    }
+
+    flex_ik::Vector IkSolver::limitWbcFullBodyStep(const flex_ik::Vector& qCurrent, const flex_ik::Vector& qSolved, bool fastMode,
+                                                   bool positionOnlyMode) const {
+        flex_ik::Vector qOut = qCurrent;
+        if (qCurrent.size() != qSolved.size()) {
+            return qOut;
+        }
+
+        const double jointMaxDelta = fastMode ? (positionOnlyMode ? 0.25 : 0.18) : (positionOnlyMode ? 1.2 : 0.65);
+        for (const auto& kv : fullBodyWbcJointQIndex_) {
+            if (kv.first == "trans_x" || kv.first == "trans_y" || kv.first == "rot_z") {
+                continue;
+            }
+            const int idxQ = kv.second;
+            if (idxQ < 0 || idxQ >= qSolved.size() || idxQ >= qCurrent.size()) {
+                continue;
+            }
+            const double target  = qSolved[idxQ];
+            const double current = qCurrent[idxQ];
+            if (!std::isfinite(target) || !std::isfinite(current)) {
+                continue;
+            }
+            const double delta = std::clamp(target - current, -jointMaxDelta, jointMaxDelta);
+            qOut[idxQ]         = current + delta;
+        }
+
+        if (fullBodyWbcHasPlanarBase_) {
+            // Keep base response deliberately slower than arm motion to avoid "chassis-dominant" behavior.
+            const double basePosDelta = fastMode ? 0.05 : 0.03;
+            const double baseYawDelta = fastMode ? 0.08 : 0.05;
+            auto clampBaseDelta       = [&](int idxQ, double deltaLimit) {
+                if (idxQ < 0 || idxQ >= qSolved.size() || idxQ >= qCurrent.size()) {
+                    return;
+                }
+                const double target  = qSolved[idxQ];
+                const double current = qCurrent[idxQ];
+                if (!std::isfinite(target) || !std::isfinite(current)) {
+                    return;
+                }
+                qOut[idxQ] = current + std::clamp(target - current, -deltaLimit, deltaLimit);
+            };
+            clampBaseDelta(fullBodyWbcBaseXQIndex_, basePosDelta);
+            clampBaseDelta(fullBodyWbcBaseYQIndex_, basePosDelta);
+            clampBaseDelta(fullBodyWbcBaseYawQIndex_, baseYawDelta);
+        }
+
         return qOut;
     }
 
@@ -580,31 +794,11 @@ namespace omnilink::teleop_viewer {
             return false;
         }
 
-        int solvedCount                = 0;
-        bool activeSolved              = false;
-        float maxErrorMm               = 0.0f;
-        bool success                   = false;
-        bool usedFallback              = false;
-        const flex_ik::Vector qCurrent = buildFullBodyQFromScene(*scene);
-        auto applyCandidate = [&](const flex_ik::Vector& solution, bool solverSuccess, const std::string& solverName) {
-            applyFullBodyQToScene(scene, limitFullBodyStep(qCurrent, solution, fastMode, positionOnlyMode));
-            if (!solverSuccess && !fastMode && !positionOnlyMode && activeChainIndex >= 0 && activeChainIndex < chainCount()) {
-                glm::vec3 tipPos(0.0f);
-                glm::vec3 tipRpy(0.0f);
-                if (fetchTipWorldPose(*scene, activeChainIndex, &tipPos, &tipRpy)) {
-                    const glm::vec3 targetPos = glm::vec3(targetWorldByChain[static_cast<size_t>(activeChainIndex)][3]);
-                    const float activeErrMm   = glm::length(tipPos - targetPos) * 1000.0f;
-                    if (activeErrMm > 120.0f) {
-                        applyFullBodyQToScene(scene, qCurrent);
-                        if (statusText) {
-                            *statusText = "IK失败：" + solverName + "姿态求解未收敛且位置偏差过大，保持当前姿态";
-                        }
-                        return false;
-                    }
-                }
-            }
-            return true;
-        };
+        int solvedCount   = 0;
+        bool activeSolved = false;
+        float maxErrorMm  = 0.0f;
+        bool success      = false;
+        bool usedFallback = false;
 
         if (fullBodyBackend_ == "wbc_chain_ik") {
             if (!fullBodyWbcReady_ || fullBodyWbcSolverPose_ == nullptr || fullBodyWbcSolverPosOnly_ == nullptr) {
@@ -613,13 +807,90 @@ namespace omnilink::teleop_viewer {
                 }
                 return false;
             }
+            const flex_ik::Vector qCurrent = buildWbcFullBodyQFromScene(*scene);
+            auto applyCandidate            = [&](const flex_ik::Vector& solution, bool solverSuccess, const std::string& solverName) {
+                applyWbcFullBodyQToScene(scene, limitWbcFullBodyStep(qCurrent, solution, fastMode, positionOnlyMode));
+                if (!solverSuccess && !fastMode && !positionOnlyMode && activeChainIndex >= 0 && activeChainIndex < chainCount()) {
+                    glm::vec3 tipPos(0.0f);
+                    glm::vec3 tipRpy(0.0f);
+                    if (fetchTipWorldPose(*scene, activeChainIndex, &tipPos, &tipRpy)) {
+                        const glm::vec3 targetPos = glm::vec3(targetWorldByChain[static_cast<size_t>(activeChainIndex)][3]);
+                        const float activeErrMm   = glm::length(tipPos - targetPos) * 1000.0f;
+                        if (activeErrMm > 120.0f) {
+                            applyWbcFullBodyQToScene(scene, qCurrent);
+                            if (statusText) {
+                                *statusText = "IK失败：" + solverName + "姿态求解未收敛且位置偏差过大，保持当前姿态";
+                            }
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            };
+
             Wbc::robot::ChainIkTrait* wbcSolver = positionOnlyMode ? fullBodyWbcSolverPosOnly_.get() : fullBodyWbcSolverPose_.get();
             wbcSolver->setMaxIters(fastMode ? std::max(positionOnlyMode ? 12 : 60, iterations * (positionOnlyMode ? 6 : 24))
-                                             : std::max(50, iterations * 25));
+                                            : std::max(50, iterations * 25));
             wbcSolver->setTolerance(fastMode ? (positionOnlyMode ? 3e-4 : 8e-4) : 1e-4);
-            // Keep motion regularized, but avoid over-penalizing joint motion;
-            // excessive damping here causes large tip position residuals during rotation drag.
-            wbcSolver->setJointWeights(0.8);
+            bool lockPlanarBaseForRotationOnlyDrag = false;
+            float activeTargetPosDeltaMm = 0.0f;
+            if (fullBodyWbcHasPlanarBase_ && !positionOnlyMode && activeChainIndex >= 0 && activeChainIndex < chainCount()) {
+                glm::vec3 currentTipPos(0.0f);
+                glm::vec3 currentTipRpy(0.0f);
+                if (fetchTipWorldPose(*scene, activeChainIndex, &currentTipPos, &currentTipRpy)) {
+                    const glm::vec3 targetPos = glm::vec3(targetWorldByChain[static_cast<size_t>(activeChainIndex)][3]);
+                    activeTargetPosDeltaMm = glm::length(targetPos - currentTipPos) * 1000.0f;
+                    // Rotation-dominant manipulation: keep base fixed to avoid chassis compensating arm orientation.
+                    lockPlanarBaseForRotationOnlyDrag = activeTargetPosDeltaMm < (fastMode ? 8.0f : 4.0f);
+                }
+            }
+            std::vector<Wbc::Index> fixedJointV;
+            fixedJointV.reserve(fullBodyWbcLockedVIndex_.size() + fullBodyWbcPlanarBaseVIndex_.size());
+            for (const int idx : fullBodyWbcLockedVIndex_) {
+                fixedJointV.push_back(static_cast<Wbc::Index>(idx));
+            }
+            auto appendPlanarBaseToFixed = [&](std::vector<Wbc::Index>* fixed) {
+                if (fixed == nullptr) {
+                    return;
+                }
+                for (const int idx : fullBodyWbcPlanarBaseVIndex_) {
+                    fixed->push_back(static_cast<Wbc::Index>(idx));
+                }
+            };
+            if (scene->fixedBaseMode() || lockPlanarBaseForRotationOnlyDrag) {
+                appendPlanarBaseToFixed(&fixedJointV);
+            }
+            wbcSolver->setFixedJoints(fixedJointV);
+            auto setWbcJointWeights = [&](Wbc::robot::ChainIkTrait* solver, double baseWeight, double armWeight) {
+                Wbc::Vector weights = Wbc::Vector::Constant(solver->qMin().size(), armWeight);
+                for (const int idx : fullBodyWbcPlanarBaseVIndex_) {
+                    if (idx >= 0 && idx < weights.size()) {
+                        weights(idx) = baseWeight;
+                    }
+                }
+                solver->setJointWeights(weights);
+            };
+            auto evaluateActiveChainErrorMm = [&](const flex_ik::Vector& candidateQ) -> float {
+                const flex_ik::Vector limited = limitWbcFullBodyStep(qCurrent, candidateQ, fastMode, positionOnlyMode);
+                applyWbcFullBodyQToScene(scene, limited);
+                float activeErrMm = 0.0f;
+                if (activeChainIndex >= 0 && activeChainIndex < chainCount()) {
+                    glm::vec3 tipPos(0.0f);
+                    glm::vec3 tipRpy(0.0f);
+                    if (fetchTipWorldPose(*scene, activeChainIndex, &tipPos, &tipRpy)) {
+                        const glm::vec3 targetPos = glm::vec3(targetWorldByChain[static_cast<size_t>(activeChainIndex)][3]);
+                        activeErrMm = glm::length(tipPos - targetPos) * 1000.0f;
+                    }
+                }
+                applyWbcFullBodyQToScene(scene, qCurrent);
+                return activeErrMm;
+            };
+            auto solveWbcWithConfig = [&](Wbc::robot::ChainIkTrait* solver, const std::vector<Wbc::Index>& fixedIndices, double baseWeight,
+                                          double armWeight) -> Wbc::robot::IkResult {
+                solver->setFixedJoints(fixedIndices);
+                setWbcJointWeights(solver, baseWeight, armWeight);
+                return solver->solveIK(qCurrent, false);
+            };
 
             for (int i = 0; i < chainCount(); ++i) {
                 if (!chains_[i].status.ready) {
@@ -628,9 +899,9 @@ namespace omnilink::teleop_viewer {
                 try {
                     wbcSolver->setTaskReference(chains_[i].status.config.tip_link,
                                                 glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
-                    const double taskWeight =
-                        (i == activeChainIndex) ? (fastMode ? (positionOnlyMode ? 8.0 : 12.0) : (positionOnlyMode ? 12.0 : 16.0))
-                                                : (positionOnlyMode ? 0.02 : 0.03);
+                    const double taskWeight = (i == activeChainIndex)
+                                                  ? (fastMode ? (positionOnlyMode ? 8.0 : 12.0) : (positionOnlyMode ? 12.0 : 16.0))
+                                                  : (positionOnlyMode ? 0.02 : 0.03);
                     wbcSolver->setTaskWeight(chains_[i].status.config.tip_link, taskWeight);
                 } catch (const std::exception& ex) {
                     if (statusText) {
@@ -640,11 +911,41 @@ namespace omnilink::teleop_viewer {
                 }
             }
 
-            Wbc::robot::IkResult wbcResult = wbcSolver->solveIK(qCurrent, false);
+            const bool planarBaseAvailable = fullBodyWbcHasPlanarBase_ && !fullBodyWbcPlanarBaseVIndex_.empty();
+            const bool baseAssistAllowed = planarBaseAvailable && !scene->fixedBaseMode() && !lockPlanarBaseForRotationOnlyDrag;
+
+            Wbc::robot::IkResult wbcResult;
+            if (baseAssistAllowed) {
+                // Stage-A: hard lock base, force arm-only first.
+                std::vector<Wbc::Index> armOnlyFixed = fixedJointV;
+                appendPlanarBaseToFixed(&armOnlyFixed);
+                Wbc::robot::IkResult armOnlyResult = solveWbcWithConfig(wbcSolver, armOnlyFixed, 80.0, 0.6);
+
+                bool armOnlyAccept = false;
+                if (armOnlyResult.solution.size() > 0) {
+                    const float armOnlyErrMm = evaluateActiveChainErrorMm(armOnlyResult.solution);
+                    const float armOnlyReachThresholdMm = fastMode ? 70.0f : 50.0f;
+                    const float forceBaseAssistDeltaMm = fastMode ? 70.0f : 50.0f;
+                    const bool forceBaseAssist = activeTargetPosDeltaMm > forceBaseAssistDeltaMm;
+                    armOnlyAccept = (armOnlyErrMm <= armOnlyReachThresholdMm) && !forceBaseAssist;
+                }
+
+                if (armOnlyAccept) {
+                    wbcResult = std::move(armOnlyResult);
+                } else {
+                    // Stage-B: unlock base and allow it to assist when arm-only is clearly insufficient.
+                    wbcResult = solveWbcWithConfig(wbcSolver, fixedJointV, 1.5, 0.6);
+                }
+            } else {
+                wbcResult = solveWbcWithConfig(wbcSolver, fixedJointV, 0.8, 0.6);
+            }
+
             if (!wbcResult.success && !fastMode && positionOnlyMode) {
                 Wbc::robot::ChainIkTrait* fallbackSolver = fullBodyWbcSolverPosOnly_.get();
                 fallbackSolver->setMaxIters(std::max(50, iterations * 25));
                 fallbackSolver->setTolerance(2e-4);
+                fallbackSolver->setFixedJoints(fixedJointV);
+                setWbcJointWeights(fallbackSolver, (baseAssistAllowed ? 1.5 : 0.8), 0.6);
                 for (int i = 0; i < chainCount(); ++i) {
                     if (!chains_[i].status.ready) {
                         continue;
@@ -675,6 +976,27 @@ namespace omnilink::teleop_viewer {
                 }
                 return false;
             }
+            const flex_ik::Vector qCurrent = buildFullBodyQFromScene(*scene);
+            auto applyCandidate            = [&](const flex_ik::Vector& solution, bool solverSuccess, const std::string& solverName) {
+                applyFullBodyQToScene(scene, limitFullBodyStep(qCurrent, solution, fastMode, positionOnlyMode));
+                if (!solverSuccess && !fastMode && !positionOnlyMode && activeChainIndex >= 0 && activeChainIndex < chainCount()) {
+                    glm::vec3 tipPos(0.0f);
+                    glm::vec3 tipRpy(0.0f);
+                    if (fetchTipWorldPose(*scene, activeChainIndex, &tipPos, &tipRpy)) {
+                        const glm::vec3 targetPos = glm::vec3(targetWorldByChain[static_cast<size_t>(activeChainIndex)][3]);
+                        const float activeErrMm   = glm::length(tipPos - targetPos) * 1000.0f;
+                        if (activeErrMm > 120.0f) {
+                            applyFullBodyQToScene(scene, qCurrent);
+                            if (statusText) {
+                                *statusText = "IK失败：" + solverName + "姿态求解未收敛且位置偏差过大，保持当前姿态";
+                            }
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            };
+
             flex_ik::FlexIk* solver = positionOnlyMode ? fullBodySolverPosOnly_.get() : fullBodySolverPose_.get();
             auto params             = solver->iterativeParams();
             params.max_iterations   = fastMode ? std::max(6, iterations * (positionOnlyMode ? 4 : 8)) : std::max(20, iterations * 15);
@@ -689,9 +1011,9 @@ namespace omnilink::teleop_viewer {
                 }
                 try {
                     solver->updateTaskTarget(chains_[i].status.config.tip_link, glmToFlexSe3(targetWorldByChain[static_cast<size_t>(i)]));
-                    const double taskWeight =
-                        (i == activeChainIndex) ? (fastMode ? (positionOnlyMode ? 8.0 : 12.0) : (positionOnlyMode ? 12.0 : 16.0))
-                                                : (positionOnlyMode ? 0.02 : 0.03);
+                    const double taskWeight = (i == activeChainIndex)
+                                                  ? (fastMode ? (positionOnlyMode ? 8.0 : 12.0) : (positionOnlyMode ? 12.0 : 16.0))
+                                                  : (positionOnlyMode ? 0.02 : 0.03);
                     solver->setTaskWeight(chains_[i].status.config.tip_link, taskWeight);
                 } catch (const std::exception& ex) {
                     if (statusText) {

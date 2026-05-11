@@ -270,7 +270,19 @@ namespace omnilink::teleop_viewer {
         std::string urdf_file_path;
         urdf::ModelInterfaceSharedPtr urdf_model;
 
-        bool fixed_base_mode = true;
+        bool fixed_base_mode       = true;
+        float virtual_base_x_m     = 0.0f;
+        float virtual_base_y_m     = 0.0f;
+        float virtual_base_yaw_rad = 0.0f;
+
+        glm::mat4 rootWorldTransform() const {
+            if (fixed_base_mode) {
+                return glm::mat4(1.0f);
+            }
+            glm::mat4 transform = glm::translate(glm::mat4(1.0f), glm::vec3(virtual_base_x_m, virtual_base_y_m, 0.0f));
+            transform           = transform * glm::rotate(glm::mat4(1.0f), virtual_base_yaw_rad, glm::vec3(0.0f, 0.0f, 1.0f));
+            return transform;
+        }
 
         bool computeBoundingSphereFromModel(const Model& model, glm::vec3* out_center, float* out_radius) const {
             if (out_center == nullptr || out_radius == nullptr) {
@@ -608,7 +620,7 @@ namespace omnilink::teleop_viewer {
                 }
             };
 
-        traverse(model->getRoot(), glm::mat4(1.0f), "");
+        traverse(model->getRoot(), impl_->rootWorldTransform(), "");
         return true;
     }
 
@@ -683,7 +695,7 @@ namespace omnilink::teleop_viewer {
             }
         };
 
-        traverse(impl_->urdf_model->getRoot(), glm::mat4(1.0f));
+        traverse(impl_->urdf_model->getRoot(), impl_->rootWorldTransform());
     }
 
     void RobotScene::draw(GLuint shader) {
@@ -895,6 +907,22 @@ namespace omnilink::teleop_viewer {
     }
     bool RobotScene::fixedBaseMode() const {
         return impl_->fixed_base_mode;
+    }
+
+    void RobotScene::setVirtualBasePose2D(float x_m, float y_m, float yaw_rad) {
+        impl_->virtual_base_x_m     = x_m;
+        impl_->virtual_base_y_m     = y_m;
+        impl_->virtual_base_yaw_rad = yaw_rad;
+    }
+
+    bool RobotScene::getVirtualBasePose2D(float* x_m, float* y_m, float* yaw_rad) const {
+        if (x_m == nullptr || y_m == nullptr || yaw_rad == nullptr) {
+            return false;
+        }
+        *x_m     = impl_->virtual_base_x_m;
+        *y_m     = impl_->virtual_base_y_m;
+        *yaw_rad = impl_->virtual_base_yaw_rad;
+        return true;
     }
 
     glm::vec3 OrbitCamera::eye() const {
