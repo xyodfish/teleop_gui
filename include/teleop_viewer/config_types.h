@@ -58,6 +58,7 @@ struct UiConfig {
 
     std::string cjk_font_path = "";
     float cjk_font_size = 18.0f;
+    std::string theme_preset = "current_dark";  // current_dark | moonlight | spectrum_light
 };
 
 struct ViewerIkChainConfig {

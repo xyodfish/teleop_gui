@@ -133,6 +133,7 @@ RobotViewerConfig RobotViewerConfig::LoadFromFile(const std::string& yaml_path, 
         ReadScalar(root["ui"], "auto_start_recording", cfg.ui.auto_start_recording);
         ReadScalar(root["ui"], "cjk_font_path", cfg.ui.cjk_font_path);
         ReadScalar(root["ui"], "cjk_font_size", cfg.ui.cjk_font_size);
+        ReadScalar(root["ui"], "theme_preset", cfg.ui.theme_preset);
 
         ReadScalar(root["ik"], "mode", cfg.ik.mode);
         ReadScalar(root["ik"], "full_body_backend", cfg.ik.full_body_backend);

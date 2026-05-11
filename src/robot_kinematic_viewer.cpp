@@ -119,7 +119,8 @@ int main(int argc, char** argv) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     kinematic_viewer::SetupKinematicViewerFonts(cfg);
-    kinematic_viewer::ApplyKinematicUiStyle();
+    int ui_theme_index = kinematic_viewer::KinematicUiThemeIndexFromName(cfg.ui.theme_preset);
+    kinematic_viewer::ApplyKinematicUiStyleByIndex(ui_theme_index);
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
@@ -788,6 +789,14 @@ int main(int argc, char** argv) {
         }
 
         ImGui::TextWrapped("URDF: %s", urdf_path.c_str());
+        {
+            const auto& theme_names = kinematic_viewer::KinematicUiThemeNames();
+            int new_theme_index     = ui_theme_index;
+            if (ImGui::Combo("主题", &new_theme_index, theme_names.data(), static_cast<int>(theme_names.size()))) {
+                ui_theme_index = new_theme_index;
+                kinematic_viewer::ApplyKinematicUiStyleByIndex(ui_theme_index);
+            }
+        }
         ImGui::TextDisabled("视角：左键旋转，中键/Shift+左键平移，右键拖动缩放，滚轮缩放");
         ImGui::Separator();
         const char* sidebar_pages[] = {"场景", "IK", "回放", "安全", "关节", "TF"};

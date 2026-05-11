@@ -23,6 +23,7 @@ ui:
   fix_base_like_mujoco: true
   cjk_font_path: ""
   cjk_font_size: 18.0
+  theme_preset: "current_dark"  # current_dark | moonlight | spectrum_light
 
 ros:
   enable: false

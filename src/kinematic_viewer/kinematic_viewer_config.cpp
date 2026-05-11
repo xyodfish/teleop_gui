@@ -136,6 +136,7 @@ KinematicViewerConfig KinematicViewerConfig::LoadFromFile(const std::string& yam
         ReadScalar(root["ui"], "fix_base_like_mujoco", cfg.ui.fix_base_like_mujoco);
         ReadScalar(root["ui"], "cjk_font_path", cfg.ui.cjk_font_path);
         ReadScalar(root["ui"], "cjk_font_size", cfg.ui.cjk_font_size);
+        ReadScalar(root["ui"], "theme_preset", cfg.ui.theme_preset);
 
         ReadScalar(root["ik"], "mode", cfg.ik.mode);
         ReadScalar(root["ik"], "full_body_backend", cfg.ik.full_body_backend);
