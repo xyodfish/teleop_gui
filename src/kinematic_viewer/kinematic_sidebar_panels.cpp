@@ -1,5 +1,7 @@
 #include "kinematic_viewer/kinematic_sidebar_panels.h"
 
+#include "kinematic_viewer/kinematic_user_obstacles.h"
+
 #include "imgui.h"
 
 #include <glm/gtc/type_ptr.hpp>
@@ -196,7 +198,14 @@ void RenderScenePanel(ViewerState* uiState) {
     ImGui::SliderFloat("世界轴长度", &uiState->world_axis_length, 0.1f, 1.5f, "%.2f");
     ImGui::SliderFloat("地面网格尺寸", &uiState->grid_size, 1.0f, 20.0f, "%.1f");
     ImGui::SliderInt("地面网格密度", &uiState->grid_count, 10, 120);
+}
+
+void RenderObstaclePanel(ViewerState* uiState) {
+    if (uiState == nullptr) {
+        return;
+    }
     ImGui::Separator();
+    RenderUserObstaclePanel(&uiState->user_obstacles);
 }
 
 void RenderJointPanel(ViewerState* uiState, omnilink::teleop_viewer::RobotScene* scene,
@@ -500,17 +509,37 @@ void RenderSafetyPanel(CollisionMonitorState* collisionState, const CollisionMon
     ImGui::Separator();
     ImGui::TextUnformatted("碰撞预警与距离监控");
     ImGui::Checkbox("启用碰撞监控", &collisionState->enable);
-    ImGui::Checkbox("忽略同一Link", &collisionState->ignore_same_link);
-    ImGui::Checkbox("忽略父子Link", &collisionState->ignore_parent_child);
+    ImGui::SameLine();
     ImGui::Checkbox("显示最近对连线", &collisionState->show_closest_pair_line);
+    ImGui::Checkbox("忽略同一Link", &collisionState->ignore_same_link);
+    ImGui::SameLine();
+    ImGui::Checkbox("忽略父子Link", &collisionState->ignore_parent_child);
+    ImGui::SetNextItemWidth(180.0f);
     ImGui::DragFloat("Danger阈值(m)", &collisionState->danger_distance_m, 0.002f, -0.20f, 0.30f, "%.3f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(180.0f);
     ImGui::DragFloat("Warning阈值(m)", &collisionState->warning_distance_m, 0.002f, -0.20f, 0.50f, "%.3f");
     if (collisionState->warning_distance_m < collisionState->danger_distance_m) {
         collisionState->warning_distance_m = collisionState->danger_distance_m;
     }
 
-    ImGui::Text("评估Pair数: %d", collisionState->evaluated_pair_count);
-    ImGui::Text("Warning对数: %d  Danger对数: %d", collisionResult.warning_pair_count, collisionResult.danger_pair_count);
+    if (ImGui::BeginTable("safety_stats", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Text("评估Pair数");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::Text("Warning对数");
+        ImGui::TableSetColumnIndex(2);
+        ImGui::Text("Danger对数");
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Text("%d", collisionState->evaluated_pair_count);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::Text("%d", collisionResult.warning_pair_count);
+        ImGui::TableSetColumnIndex(2);
+        ImGui::Text("%d", collisionResult.danger_pair_count);
+        ImGui::EndTable();
+    }
     if (!collisionState->has_valid_distance) {
         ImGui::TextDisabled("暂无可用距离数据（可能proxy不足或全部被过滤）");
         return;

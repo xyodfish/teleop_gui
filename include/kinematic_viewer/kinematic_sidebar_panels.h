@@ -16,6 +16,7 @@ void RenderPlaybackPanel(DebugPlaybackState* playbackState, TrajectoryPlayer* pl
                          omnilink::teleop_viewer::RobotScene* scene,
                          const std::vector<omnilink::teleop_viewer::RobotScene::JointInfo>& joints);
 void RenderSafetyPanel(CollisionMonitorState* collisionState, const CollisionMonitorResult& collisionResult);
+void RenderObstaclePanel(ViewerState* uiState);
 void RenderTfPanel(ViewerState* uiState, const std::vector<omnilink::teleop_viewer::RobotScene::LinkTfInfo>& tfs);
 
 }  // namespace kinematic_viewer

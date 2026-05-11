@@ -209,6 +209,7 @@ add_executable(robot_kinematic_viewer
     src/kinematic_viewer/kinematic_marker_utils.cpp
     src/kinematic_viewer/kinematic_shader_utils.cpp
     src/kinematic_viewer/kinematic_line_renderer.cpp
+    src/kinematic_viewer/kinematic_user_obstacles.cpp
     src/teleop_viewer/ik_solver.cpp
     src/teleop_viewer/scene.cpp
     deps/glad/glad.c
