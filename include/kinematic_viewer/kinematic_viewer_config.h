@@ -17,6 +17,21 @@ struct KinematicRosConfig {
     bool enable = true;
 };
 
+struct KinematicInitialPoseConfig {
+    bool enable = false;
+    bool auto_apply_on_start = false;
+
+    std::vector<std::string> head_joint_names;
+    std::vector<std::string> leg_joint_names;
+    std::vector<std::string> left_arm_joint_names;
+    std::vector<std::string> right_arm_joint_names;
+
+    std::vector<float> head;
+    std::vector<float> leg;
+    std::vector<float> left_arm;
+    std::vector<float> right_arm;
+};
+
 struct KinematicViewerConfig {
     WindowConfig window;
     RobotConfig robot;
@@ -24,6 +39,7 @@ struct KinematicViewerConfig {
     UiConfig ui;
     ViewerIkConfig ik;
     KinematicRosConfig ros;
+    KinematicInitialPoseConfig initial_pose;
 
     static KinematicViewerConfig LoadFromFile(const std::string& yaml_path, bool* loaded_ok = nullptr);
 };

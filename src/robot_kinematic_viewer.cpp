@@ -1,5 +1,6 @@
 #include "kinematic_viewer/kinematic_bootstrap.h"
 #include "kinematic_viewer/kinematic_collision_monitor.h"
+#include "kinematic_viewer/kinematic_initial_pose.h"
 #include "kinematic_viewer/kinematic_playback.h"
 #include "kinematic_viewer/kinematic_sidebar_panels.h"
 #include "kinematic_viewer/kinematic_viewer_config.h"
@@ -9,6 +10,7 @@
 #include "kinematic_viewer/kinematic_marker_target_state.h"
 #include "kinematic_viewer/kinematic_shader_utils.h"
 #include "kinematic_viewer/kinematic_ui_theme.h"
+#include "kinematic_viewer/kinematic_ui_feedback.h"
 #include "teleop_viewer/ik_solver.h"
 #include "teleop_viewer/scene.h"
 #include "kinematic_viewer/kinematic_ros_bridge.h"
@@ -38,6 +40,9 @@ using kinematic_viewer::DebugPlaybackState;
 using kinematic_viewer::CollisionMonitor;
 using kinematic_viewer::CollisionMonitorResult;
 using kinematic_viewer::CollisionMonitorState;
+using kinematic_viewer::InitialPoseApplyResult;
+using kinematic_viewer::KinematicUiFeedback;
+using kinematic_viewer::UiSemanticLevel;
 using kinematic_viewer::IkState;
 using kinematic_viewer::KinematicLineRenderer;
 using kinematic_viewer::KinematicLineVertex;
@@ -172,6 +177,9 @@ int main(int argc, char** argv) {
     CollisionMonitorState collision_state;
     TrajectoryPlayer trajectory_player;
     CollisionMonitor collision_monitor;
+    KinematicUiFeedback ui_feedback;
+    std::string last_playback_io_status;
+    bool initial_pose_auto_apply_pending = cfg.initial_pose.enable && cfg.initial_pose.auto_apply_on_start;
     {
         ik_state.solve_mode = cfg.ik.mode;
         std::transform(ik_state.solve_mode.begin(), ik_state.solve_mode.end(), ik_state.solve_mode.begin(),
@@ -254,12 +262,28 @@ int main(int argc, char** argv) {
         loadActiveMarkerFromTarget();
     }
 
+    auto applyConfiguredInitialPose = [&]() -> InitialPoseApplyResult {
+        InitialPoseApplyResult result = kinematic_viewer::ApplyConfiguredInitialPose(cfg.initial_pose, &scene);
+        ik_state.marker_initialized = false;
+        if (!ik_state.chains.empty()) {
+            loadActiveMarkerFromTarget();
+        }
+        return result;
+    };
+
     while (!glfwWindowShouldClose(window)) {
         ros_bridge.spinOnce();
         glfwPollEvents();
         double now_sec = glfwGetTime();
         double dt_sec  = std::max(0.0, now_sec - last_frame_sec);
         last_frame_sec = now_sec;
+
+        if (initial_pose_auto_apply_pending) {
+            InitialPoseApplyResult result = applyConfiguredInitialPose();
+            UiSemanticLevel level = result.missing_joint_count > 0 ? UiSemanticLevel::Warning : UiSemanticLevel::Success;
+            ui_feedback.Push(level, std::string("初始位姿加载: ") + result.detail, now_sec, 4.0);
+            initial_pose_auto_apply_pending = false;
+        }
 
         double x = 0.0, y = 0.0;
         glfwGetCursorPos(window, &x, &y);
@@ -789,13 +813,60 @@ int main(int argc, char** argv) {
         }
 
         ImGui::TextWrapped("URDF: %s", urdf_path.c_str());
+        if (cfg.initial_pose.enable) {
+            if (ImGui::Button("加载初始位姿")) {
+                InitialPoseApplyResult result = applyConfiguredInitialPose();
+                UiSemanticLevel level = result.missing_joint_count > 0 ? UiSemanticLevel::Warning : UiSemanticLevel::Success;
+                ui_feedback.Push(level, std::string("初始位姿加载: ") + result.detail, now_sec, 4.0);
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("来自 config.initial_pose");
+        }
         {
             const auto& theme_names = kinematic_viewer::KinematicUiThemeNames();
             int new_theme_index     = ui_theme_index;
             if (ImGui::Combo("主题", &new_theme_index, theme_names.data(), static_cast<int>(theme_names.size()))) {
                 ui_theme_index = new_theme_index;
                 kinematic_viewer::ApplyKinematicUiStyleByIndex(ui_theme_index);
+                ui_feedback.Push(UiSemanticLevel::Info, std::string("主题切换: ") + theme_names[static_cast<size_t>(ui_theme_index)], now_sec);
             }
+        }
+        {
+            auto playbackLevel = UiSemanticLevel::Info;
+            const char* playbackLabel = "回放 STOP";
+            if (playback_state.mode == DebugPlaybackState::Mode::Playing) {
+                playbackLevel = UiSemanticLevel::Success;
+                playbackLabel = "回放 PLAY";
+            } else if (playback_state.mode == DebugPlaybackState::Mode::Paused) {
+                playbackLevel = UiSemanticLevel::Warning;
+                playbackLabel = "回放 PAUSE";
+            }
+
+            auto collisionLevel = UiSemanticLevel::Info;
+            std::string collisionLabel("碰撞 --");
+            if (collision_state.has_valid_distance) {
+                if (collision_state.nearest_surface_distance_m <= collision_state.danger_distance_m) {
+                    collisionLevel = UiSemanticLevel::Error;
+                    collisionLabel = "碰撞 DANGER";
+                } else if (collision_state.nearest_surface_distance_m <= collision_state.warning_distance_m) {
+                    collisionLevel = UiSemanticLevel::Warning;
+                    collisionLabel = "碰撞 WARN";
+                } else {
+                    collisionLevel = UiSemanticLevel::Success;
+                    collisionLabel = "碰撞 SAFE";
+                }
+            }
+
+            auto rosLevel = ros_bridge.enabled() ? UiSemanticLevel::Success : UiSemanticLevel::Warning;
+            ImGui::BeginChild("##top_status_chips", ImVec2(0.0f, 34.0f), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            KinematicUiFeedback::RenderStatusChip(ros_bridge.enabled() ? "ROS ON" : "ROS OFF", rosLevel);
+            ImGui::SameLine();
+            KinematicUiFeedback::RenderStatusChip(ik_state.solve_mode == "full_body" ? "IK FULL_BODY" : "IK SINGLE", UiSemanticLevel::Info);
+            ImGui::SameLine();
+            KinematicUiFeedback::RenderStatusChip(playbackLabel, playbackLevel);
+            ImGui::SameLine();
+            KinematicUiFeedback::RenderStatusChip(collisionLabel.c_str(), collisionLevel);
+            ImGui::EndChild();
         }
         ImGui::TextDisabled("视角：左键旋转，中键/Shift+左键平移，右键拖动缩放，滚轮缩放");
         ImGui::Separator();
@@ -984,7 +1055,23 @@ int main(int argc, char** argv) {
             RenderTfPanel(&ui_state, scene.getLinkTfInfos());
         }
 
+        if (playback_state.trajectory_io_status != last_playback_io_status) {
+            if (!playback_state.trajectory_io_status.empty()) {
+                UiSemanticLevel level = UiSemanticLevel::Info;
+                if (playback_state.trajectory_io_status.find("失败") != std::string::npos) {
+                    level = UiSemanticLevel::Error;
+                } else if (playback_state.trajectory_io_status.find("成功") != std::string::npos) {
+                    level = UiSemanticLevel::Success;
+                } else if (playback_state.trajectory_io_status.find("告警") != std::string::npos) {
+                    level = UiSemanticLevel::Warning;
+                }
+                ui_feedback.Push(level, playback_state.trajectory_io_status, now_sec, level == UiSemanticLevel::Error ? 4.5 : 2.8);
+            }
+            last_playback_io_status = playback_state.trajectory_io_status;
+        }
+
         ImGui::End();
+        ui_feedback.RenderToasts(now_sec);
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

@@ -351,104 +351,123 @@ void RenderPlaybackPanel(DebugPlaybackState* playbackState, TrajectoryPlayer* pl
 
     ImGui::Separator();
     ImGui::TextUnformatted("轨迹关键帧回放");
-    ImGui::DragFloat("关键帧间隔(s)", &playbackState->keyframe_interval_sec, 0.02f, 0.02f, 5.0f, "%.2f");
-    ImGui::InputText("轨迹文件", playbackState->trajectory_file_path, sizeof(playbackState->trajectory_file_path));
-    ImGui::SameLine();
-    kinematic_sidebar_panels_internal::RenderTrajectoryFileBrowser(playbackState);
-    if (ImGui::Button("加载轨迹文件")) {
-        const DebugPlaybackState previousState = *playbackState;
-        std::string ioError;
-        if (LoadTrajectoryFromFile(playbackState->trajectory_file_path, playbackState, &ioError)) {
-            std::string checkError;
-            if (!kinematic_sidebar_panels_internal::ValidateTrajectoryJointNames(*playbackState, joints, &checkError)) {
-                *playbackState = previousState;
-                playbackState->trajectory_io_status = "加载失败: " + checkError;
-                playbackState->trajectory_alert_message = "该轨迹与当前机器人关节定义不匹配。";
-                playbackState->trajectory_alert_detail = checkError;
-                playbackState->trajectory_alert_popup_pending = true;
-            } else {
-                playbackPlayer->SampleAtCurrentTime(*playbackState, scene);
-                playbackState->trajectory_io_status = "加载成功";
-            }
-        } else {
-            playbackState->trajectory_io_status = "加载失败: " + ioError;
-            playbackState->trajectory_alert_message = "轨迹文件加载失败，请检查路径或文件格式。";
-            playbackState->trajectory_alert_detail = ioError;
-            playbackState->trajectory_alert_popup_pending = true;
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("保存当前轨迹")) {
-        std::string ioError;
-        if (SaveTrajectoryToFile(playbackState->trajectory_file_path, *playbackState, &ioError)) {
-            playbackState->trajectory_io_status = "保存成功";
-        } else {
-            playbackState->trajectory_io_status = "保存失败: " + ioError;
-        }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("生成Demo轨迹")) {
-        BuildDemoTrajectoryFromCurrentPose(playbackState, joints);
-        std::string ioError;
-        if (SaveTrajectoryToFile(playbackState->trajectory_file_path, *playbackState, &ioError)) {
-            playbackState->trajectory_io_status = "Demo轨迹已生成并保存";
-        } else {
-            playbackState->trajectory_io_status = "Demo生成成功但保存失败: " + ioError;
-        }
-        playbackPlayer->SampleAtCurrentTime(*playbackState, scene);
-    }
-    if (!playbackState->trajectory_io_status.empty()) {
-        ImGui::TextDisabled("%s", playbackState->trajectory_io_status.c_str());
-    }
-    ImGui::Separator();
-    if (ImGui::Button("记录关键帧")) {
-        playbackPlayer->RecordKeyframe(playbackState, joints);
-    }
-    ImGui::SameLine();
-    const bool playing = playbackState->mode == DebugPlaybackState::Mode::Playing;
-    if (ImGui::Button(playing ? "暂停回放" : "开始回放")) {
-        playbackPlayer->TogglePlayPause(playbackState);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("停止")) {
-        playbackPlayer->Stop(playbackState);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("清空")) {
-        playbackPlayer->Clear(playbackState);
-    }
-    ImGui::Checkbox("循环回放", &playbackState->loop);
-    ImGui::SliderFloat("回放倍速", &playbackState->play_speed, 0.1f, 3.0f, "%.2fx");
 
-    if (!playbackState->keyframes.empty() && playbackState->selected_keyframe_index >= 0 &&
-        playbackState->selected_keyframe_index < static_cast<int>(playbackState->keyframes.size())) {
+    if (ImGui::CollapsingHeader("文件", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::DragFloat("关键帧间隔(s)", &playbackState->keyframe_interval_sec, 0.02f, 0.02f, 5.0f, "%.2f");
+        ImGui::InputText("轨迹文件", playbackState->trajectory_file_path, sizeof(playbackState->trajectory_file_path));
         ImGui::SameLine();
-        if (ImGui::Button("删除选中关键帧")) {
-            playbackPlayer->RemoveSelectedKeyframe(playbackState);
+        kinematic_sidebar_panels_internal::RenderTrajectoryFileBrowser(playbackState);
+
+        if (ImGui::Button("加载轨迹文件")) {
+            const DebugPlaybackState previousState = *playbackState;
+            std::string ioError;
+            if (LoadTrajectoryFromFile(playbackState->trajectory_file_path, playbackState, &ioError)) {
+                std::string checkError;
+                if (!kinematic_sidebar_panels_internal::ValidateTrajectoryJointNames(*playbackState, joints, &checkError)) {
+                    *playbackState = previousState;
+                    playbackState->trajectory_io_status          = "加载失败: " + checkError;
+                    playbackState->trajectory_alert_message      = "该轨迹与当前机器人关节定义不匹配。";
+                    playbackState->trajectory_alert_detail       = checkError;
+                    playbackState->trajectory_alert_popup_pending = true;
+                } else {
+                    playbackPlayer->SampleAtCurrentTime(*playbackState, scene);
+                    playbackState->trajectory_io_status = "加载成功";
+                }
+            } else {
+                playbackState->trajectory_io_status           = "加载失败: " + ioError;
+                playbackState->trajectory_alert_message       = "轨迹文件加载失败，请检查路径或文件格式。";
+                playbackState->trajectory_alert_detail        = ioError;
+                playbackState->trajectory_alert_popup_pending = true;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("保存当前轨迹")) {
+            std::string ioError;
+            if (SaveTrajectoryToFile(playbackState->trajectory_file_path, *playbackState, &ioError)) {
+                playbackState->trajectory_io_status = "保存成功";
+            } else {
+                playbackState->trajectory_io_status = "保存失败: " + ioError;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("生成Demo轨迹")) {
+            BuildDemoTrajectoryFromCurrentPose(playbackState, joints);
+            std::string ioError;
+            if (SaveTrajectoryToFile(playbackState->trajectory_file_path, *playbackState, &ioError)) {
+                playbackState->trajectory_io_status = "Demo轨迹已生成并保存";
+            } else {
+                playbackState->trajectory_io_status = "Demo生成成功但保存失败: " + ioError;
+            }
+            playbackPlayer->SampleAtCurrentTime(*playbackState, scene);
+        }
+
+        if (!playbackState->trajectory_io_status.empty()) {
+            ImVec4 color(0.66f, 0.72f, 0.80f, 1.0f);
+            if (playbackState->trajectory_io_status.find("失败") != std::string::npos) {
+                color = ImVec4(0.95f, 0.42f, 0.42f, 1.0f);
+            } else if (playbackState->trajectory_io_status.find("成功") != std::string::npos) {
+                color = ImVec4(0.40f, 0.84f, 0.52f, 1.0f);
+            }
+            ImGui::TextColored(color, "%s", playbackState->trajectory_io_status.c_str());
         }
     }
 
-    if (!playbackState->keyframes.empty()) {
-        float total = TrajectoryPlayer::TotalDuration(*playbackState);
-        if (ImGui::SliderFloat("回放时间", &playbackState->play_time, 0.0f, std::max(0.0f, total), "%.2f s")) {
-            playbackState->timeline_edited_this_ui = true;
+    if (ImGui::CollapsingHeader("播放控制", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Button("记录关键帧")) {
+            playbackPlayer->RecordKeyframe(playbackState, joints);
         }
-        if (playbackState->timeline_edited_this_ui) {
-            playbackPlayer->SampleAtCurrentTime(*playbackState, scene);
-            playbackState->timeline_edited_this_ui = false;
+        ImGui::SameLine();
+        const bool playing = playbackState->mode == DebugPlaybackState::Mode::Playing;
+        if (ImGui::Button(playing ? "暂停回放" : "开始回放")) {
+            playbackPlayer->TogglePlayPause(playbackState);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("停止")) {
+            playbackPlayer->Stop(playbackState);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("清空")) {
+            playbackPlayer->Clear(playbackState);
         }
 
-        const char* modeLabel = "Stopped";
-        if (playbackState->mode == DebugPlaybackState::Mode::Playing) {
-            modeLabel = "Playing";
-        } else if (playbackState->mode == DebugPlaybackState::Mode::Paused) {
-            modeLabel = "Paused";
-        }
-        ImGui::Text("状态: %s  总时长: %.2fs  当前段: %d", modeLabel, total, playbackState->current_segment_index);
-        ImGui::Text("关键帧数: %d", static_cast<int>(playbackState->keyframes.size()));
+        ImGui::Checkbox("循环回放", &playbackState->loop);
+        ImGui::SliderFloat("回放倍速", &playbackState->play_speed, 0.1f, 3.0f, "%.2fx");
 
-        if (ImGui::BeginTable("keyframe_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-                              ImVec2(0.0f, 180.0f))) {
+        if (!playbackState->keyframes.empty()) {
+            float total = TrajectoryPlayer::TotalDuration(*playbackState);
+            if (ImGui::SliderFloat("回放时间", &playbackState->play_time, 0.0f, std::max(0.0f, total), "%.2f s")) {
+                playbackState->timeline_edited_this_ui = true;
+            }
+            if (playbackState->timeline_edited_this_ui) {
+                playbackPlayer->SampleAtCurrentTime(*playbackState, scene);
+                playbackState->timeline_edited_this_ui = false;
+            }
+
+            const char* modeLabel = "Stopped";
+            if (playbackState->mode == DebugPlaybackState::Mode::Playing) {
+                modeLabel = "Playing";
+            } else if (playbackState->mode == DebugPlaybackState::Mode::Paused) {
+                modeLabel = "Paused";
+            }
+            ImGui::Text("状态: %s  总时长: %.2fs  当前段: %d", modeLabel, total, playbackState->current_segment_index);
+            ImGui::Text("关键帧数: %d", static_cast<int>(playbackState->keyframes.size()));
+        } else {
+            ImGui::TextDisabled("暂无关键帧，点击“记录关键帧”开始。");
+        }
+    }
+
+    if (ImGui::CollapsingHeader("关键帧列表", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (!playbackState->keyframes.empty() && playbackState->selected_keyframe_index >= 0 &&
+            playbackState->selected_keyframe_index < static_cast<int>(playbackState->keyframes.size())) {
+            if (ImGui::Button("删除选中关键帧")) {
+                playbackPlayer->RemoveSelectedKeyframe(playbackState);
+            }
+        }
+
+        if (playbackState->keyframes.empty()) {
+            ImGui::TextDisabled("暂无关键帧。");
+        } else if (ImGui::BeginTable("keyframe_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                                      ImVec2(0.0f, 200.0f))) {
             ImGui::TableSetupColumn("索引");
             ImGui::TableSetupColumn("时间(s)");
             ImGui::TableSetupColumn("关节数");
@@ -461,7 +480,7 @@ void RenderPlaybackPanel(DebugPlaybackState* playbackState, TrajectoryPlayer* pl
                 snprintf(selectLabel, sizeof(selectLabel), "KF %d", i);
                 if (ImGui::Selectable(selectLabel, playbackState->selected_keyframe_index == i, ImGuiSelectableFlags_SpanAllColumns)) {
                     playbackState->selected_keyframe_index = i;
-                    playbackState->play_time = static_cast<float>(keyframe.t);
+                    playbackState->play_time               = static_cast<float>(keyframe.t);
                     playbackPlayer->SampleAtCurrentTime(*playbackState, scene);
                 }
                 ImGui::TableSetColumnIndex(1);
@@ -471,8 +490,6 @@ void RenderPlaybackPanel(DebugPlaybackState* playbackState, TrajectoryPlayer* pl
             }
             ImGui::EndTable();
         }
-    } else {
-        ImGui::TextDisabled("暂无关键帧，先点击“记录关键帧”。");
     }
 }
 

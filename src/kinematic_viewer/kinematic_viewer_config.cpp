@@ -18,6 +18,18 @@ void ReadScalar(const YAML::Node& node, const char* key, T& out) {
     }
 }
 
+void ReadFloatList(const YAML::Node& node, const char* key, std::vector<float>& out) {
+    if (!node || !node[key] || !node[key].IsSequence()) {
+        return;
+    }
+    out.clear();
+    for (const auto& item : node[key]) {
+        if (item.IsScalar()) {
+            out.push_back(item.as<float>());
+        }
+    }
+}
+
 void ReadVec3(const YAML::Node& node, const char* key, glm::vec3& out) {
     if (!node || !node[key] || !node[key].IsSequence() || node[key].size() < 3) {
         return;
@@ -77,6 +89,7 @@ void ValidateTopLevelKeys(const YAML::Node& root) {
         "ui",
         "ik",
         "ros",
+        "initial_pose",
     };
 
     std::vector<std::string> unknown;
@@ -143,6 +156,17 @@ KinematicViewerConfig KinematicViewerConfig::LoadFromFile(const std::string& yam
         ReadScalar(root["ik"], "full_body_iterations", cfg.ik.full_body_iterations);
         ReadIkChainList(root["ik"], "chains", cfg.ik.chains);
         ReadScalar(root["ros"], "enable", cfg.ros.enable);
+
+        ReadScalar(root["initial_pose"], "enable", cfg.initial_pose.enable);
+        ReadScalar(root["initial_pose"], "auto_apply_on_start", cfg.initial_pose.auto_apply_on_start);
+        ReadStringListFromItem(root["initial_pose"], "head_joint_names", cfg.initial_pose.head_joint_names);
+        ReadStringListFromItem(root["initial_pose"], "leg_joint_names", cfg.initial_pose.leg_joint_names);
+        ReadStringListFromItem(root["initial_pose"], "left_arm_joint_names", cfg.initial_pose.left_arm_joint_names);
+        ReadStringListFromItem(root["initial_pose"], "right_arm_joint_names", cfg.initial_pose.right_arm_joint_names);
+        ReadFloatList(root["initial_pose"], "head", cfg.initial_pose.head);
+        ReadFloatList(root["initial_pose"], "leg", cfg.initial_pose.leg);
+        ReadFloatList(root["initial_pose"], "left_arm", cfg.initial_pose.left_arm);
+        ReadFloatList(root["initial_pose"], "right_arm", cfg.initial_pose.right_arm);
 
         ok = true;
     } catch (const std::exception& e) {

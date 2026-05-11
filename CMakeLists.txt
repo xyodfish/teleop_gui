@@ -200,10 +200,12 @@ add_executable(robot_kinematic_viewer
     src/kinematic_viewer/kinematic_bootstrap.cpp
     src/kinematic_viewer/kinematic_playback.cpp
     src/kinematic_viewer/kinematic_collision_monitor.cpp
+    src/kinematic_viewer/kinematic_initial_pose.cpp
     src/kinematic_viewer/kinematic_marker_target_state.cpp
     src/kinematic_viewer/kinematic_ros_bridge.cpp
     src/kinematic_viewer/kinematic_sidebar_panels.cpp
     src/kinematic_viewer/kinematic_ui_theme.cpp
+    src/kinematic_viewer/kinematic_ui_feedback.cpp
     src/kinematic_viewer/kinematic_marker_utils.cpp
     src/kinematic_viewer/kinematic_shader_utils.cpp
     src/kinematic_viewer/kinematic_line_renderer.cpp
