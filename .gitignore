@@ -1,5 +1,7 @@
 build
 build-*
+build_cmake_test/
+build_shared_test/
 .vscode
 log/
 bin/

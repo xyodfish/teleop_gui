@@ -21,7 +21,6 @@
 - `src/teleop_viewer/`：主应用核心（App、侧栏、场景、订阅发布、配置）
 - `include/teleop_viewer/`：对应头文件
 - `config/robot_viewer.yaml`：运行配置
-- `config/robot_kinematic_viewer.yaml`：`robot_kinematic_viewer` 运行配置
 - `docs/USER_GUIDE_zh.md`：面向操作人员的使用手册
 - `build.sh` / `all_rebuild.sh`：开发构建脚本
 - `auto_build.sh`：一键构建+打包+（可选）自检
@@ -175,11 +174,12 @@ cd teleop_gui_release
 
 ## 10. RViz Interactive Marker（推荐做IK拖动）🕹️
 
-如果你觉得 `robot_kinematic_viewer` 内置拖动手感不好，可以直接用 RViz 的 Interactive Marker 做 6DoF 拖动，再把目标位姿发布给 IK。
+`robot_kinematic_viewer` 已拆到同级目录 `../robot_kinematic_viewer`。若你觉得内置拖动手感不好，可用 RViz 的 Interactive Marker 做 6DoF 拖动，再把目标位姿发布给 IK。
 
-脚本位置：
+脚本位置（在 **robot_kinematic_viewer** 仓库内）：
 
-- `scripts/rviz_ik_interactive_marker.py`
+- `../robot_kinematic_viewer/scripts/rviz_ik_interactive_marker.py`
+- `../robot_kinematic_viewer/scripts/start_rviz_ik_stack.sh`
 
 ### 10.1 依赖
 
@@ -198,13 +198,14 @@ sudo apt install ros-noetic-interactive-markers ros-noetic-rviz
 一键启动整套（`roscore + static tf + marker + rviz + robot_kinematic_viewer`）：
 
 ```bash
-cd /home/yuxia/Workspace/SingoriX/OmniLink/teleop_gui
+cd /home/yuxia/Workspace/SingoriX/OmniLink/robot_kinematic_viewer
 ./scripts/start_rviz_ik_stack.sh
 ```
 
 只启动 ROS+marker（不拉起 RViz 和 viewer）：
 
 ```bash
+cd /home/yuxia/Workspace/SingoriX/OmniLink/robot_kinematic_viewer
 ./scripts/start_rviz_ik_stack.sh --no-rviz --no-viewer
 ```
 
@@ -219,6 +220,7 @@ rosrun <your_ros_pkg> rviz_ik_interactive_marker.py
 
 ```bash
 source /opt/ros/noetic/setup.bash
+cd /home/yuxia/Workspace/SingoriX/OmniLink/robot_kinematic_viewer
 python3 ./scripts/rviz_ik_interactive_marker.py
 ```
 
